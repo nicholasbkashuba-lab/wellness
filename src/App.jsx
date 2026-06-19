@@ -88,8 +88,11 @@ const vBy = (v) => (typeof v === "string" ? null : v?.by || null);
 
 const sumEntries = (e = []) => e.reduce((s, x) => s + (Number(x.amount) || 0), 0);
 const isComp = (e = []) => e.some((x) => x.method === "Comp");
+// Resolve a member's monthly rate. An explicit 0 means "No charge"; anything missing/invalid falls back to the default.
+const rateOf = (m) => { if (m && (m.rate === 0 || m.rate === "0")) return 0; const r = Number(m && m.rate); return Number.isFinite(r) && r > 0 ? r : DEFAULT_RATE; };
 function monthState(member, entries) {
-  const paid = sumEntries(entries); const rate = Number(member.rate) || DEFAULT_RATE;
+  const paid = sumEntries(entries); const rate = rateOf(member);
+  if (rate === 0) return { state: "comp", paid, rate: 0, remaining: 0 };
   if (isComp(entries)) return { state: "comp", paid, rate, remaining: 0 };
   if (rate > 0 && paid >= rate) return { state: "paid", paid, rate, remaining: 0 };
   if (paid > 0) return { state: "partial", paid, rate, remaining: rate - paid };
@@ -97,7 +100,7 @@ function monthState(member, entries) {
 }
 
 // ---------- normalization ----------
-const normMember = (m) => ({ id: m.id || uid(), name: m.name || "", phone: m.phone || m.contact || "", email: m.email || "", method: m.method || "Cash", rate: Number(m.rate) || DEFAULT_RATE, startDate: m.startDate || todayISO(), status: m.status || (m.active === false ? "cancelled" : "active"), notes: m.notes || "", activity: Array.isArray(m.activity) ? m.activity : [] });
+const normMember = (m) => ({ id: m.id || uid(), name: m.name || "", phone: m.phone || m.contact || "", email: m.email || "", method: m.method || "Cash", rate: rateOf(m), startDate: m.startDate || todayISO(), status: m.status || (m.active === false ? "cancelled" : "active"), notes: m.notes || "", activity: Array.isArray(m.activity) ? m.activity : [] });
 function normPayments(p) {
   const out = {};
   Object.entries(p || {}).forEach(([mk, byMember]) => {
@@ -481,7 +484,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, visitedOn, o
       {absent.length === 0 ? <div style={{ ...emptyLine, textAlign: "center" }}>{active.length === 0 ? "No active members yet — add them on the Members tab." : "Everyone's checked in for this day."}</div> : (
         <div style={cardList}>{absent.map((m) => (
           <div key={m.id} className="fr-row clickable" style={rowBase} onClick={() => onToggle(m.id)}>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.inkSoft, fontFamily: "Inter, sans-serif" }}>{m.method} · {money(m.rate)}/mo</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.inkSoft, fontFamily: "Inter, sans-serif" }}>{rateOf(m) === 0 ? "No charge" : `${m.method} · ${money(rateOf(m))}/mo`}</div></div>
             <span style={{ ...pill, background: C.cream, color: C.teal, border: `1px solid ${C.line}` }}>Check in</span>
           </div>
         ))}</div>
@@ -494,7 +497,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, visitedOn, o
 function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outstandingAmt, settledCount, expectedCount, methodTotals, monthsBehind, visitsInMonth, openDetail }) {
   const active = store.members.filter((m) => m.status === "active");
   const paused = store.members.filter((m) => m.status === "paused");
-  const mrr = active.reduce((s, m) => s + (Number(m.rate) || DEFAULT_RATE), 0);
+  const mrr = active.reduce((s, m) => s + rateOf(m), 0);
   const newThisMonth = store.members.filter((m) => m.startDate && m.startDate.slice(0, 7) === mk);
   const visitsTotal = store.members.reduce((s, m) => s + visitsInMonth(m, mk), 0);
   const rate = expectedCount > 0 ? Math.round((settledCount / expectedCount) * 100) : 0;
@@ -799,7 +802,7 @@ function History({ store }) {
 // =================== ADD / EDIT MEMBER ===================
 function MemberModal({ member, onSave, onClose }) {
   const [name, setName] = useState(member.name || ""); const [phone, setPhone] = useState(member.phone || member.contact || ""); const [email, setEmail] = useState(member.email || "");
-  const [method, setMethod] = useState(member.method || "Cash"); const [rate, setRate] = useState(member.rate || DEFAULT_RATE); const [startDate, setStartDate] = useState(member.startDate || todayISO());
+  const [method, setMethod] = useState(member.method || "Cash"); const [rate, setRate] = useState(member.rate === 0 ? DEFAULT_RATE : (member.rate || DEFAULT_RATE)); const [noCharge, setNoCharge] = useState(member.rate === 0); const [startDate, setStartDate] = useState(member.startDate || todayISO());
   const [status, setStatus] = useState(member.status || "active"); const [notes, setNotes] = useState(member.notes || "");
   const valid = name.trim().length > 0;
   return (
@@ -808,11 +811,12 @@ function MemberModal({ member, onSave, onClose }) {
         <h2 style={{ fontFamily: "'Playfair Display', serif", color: C.teal, margin: "0 0 16px", fontSize: 22 }}>{member.id ? "Edit member" : "Add member"}</h2>
         <Field label="Name" block><input value={name} onChange={(e) => setName(e.target.value)} style={input} autoFocus /></Field>
         <div className="grid-2"><Field label="Phone" block><input value={phone} onChange={(e) => setPhone(e.target.value)} style={input} /></Field><Field label="Email" block><input value={email} onChange={(e) => setEmail(e.target.value)} style={input} /></Field></div>
-        <div className="grid-2"><Field label="Monthly rate" block><input type="number" value={rate} onChange={(e) => setRate(e.target.value)} style={input} /></Field><Field label="Start date" block><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={input} /></Field></div>
+        <div className="grid-2"><Field label="Monthly rate" block><input type="number" value={noCharge ? 0 : rate} disabled={noCharge} onChange={(e) => setRate(e.target.value)} style={{ ...input, ...(noCharge ? { background: "#f3f4f6", color: C.inkSoft } : {}) }} /></Field><Field label="Start date" block><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={input} /></Field></div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: "Inter, sans-serif", fontSize: 14, color: C.ink, margin: "2px 0 8px" }}><input type="checkbox" checked={noCharge} onChange={(e) => setNoCharge(e.target.checked)} /> No charge — free membership ($0 / month)</label>
         <Field label="Default payment method" block><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{METHODS.map((mth) => <button key={mth} className="fr-btn" onClick={() => setMethod(mth)} style={{ ...chip, background: method === mth ? C.teal : "#fff", color: method === mth ? "#fff" : C.ink, borderColor: method === mth ? C.teal : C.line }}>{mth}</button>)}</div></Field>
         <Field label="Status" block><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{STATUSES.map((s) => <button key={s} className="fr-btn" onClick={() => setStatus(s)} style={{ ...chip, textTransform: "capitalize", background: status === s ? C.teal : "#fff", color: status === s ? "#fff" : C.ink, borderColor: status === s ? C.teal : C.line }}>{s}</button>)}</div></Field>
         <Field label="Notes (optional)" block><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} style={{ ...input, resize: "vertical" }} /></Field>
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}><button className="fr-btn" onClick={onClose} style={{ ...ghostBtn, flex: 1, padding: 12 }}>Cancel</button><button className="fr-btn" disabled={!valid} onClick={() => onSave({ ...member, name: name.trim(), phone, email, method, rate: Number(rate) || DEFAULT_RATE, startDate, status, notes })} style={{ ...primaryBtn, flex: 1, opacity: valid ? 1 : 0.5 }}>{member.id ? "Save changes" : "Add member"}</button></div>
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}><button className="fr-btn" onClick={onClose} style={{ ...ghostBtn, flex: 1, padding: 12 }}>Cancel</button><button className="fr-btn" disabled={!valid} onClick={() => onSave({ ...member, name: name.trim(), phone, email, method, rate: noCharge ? 0 : (Number(rate) || DEFAULT_RATE), startDate, status, notes })} style={{ ...primaryBtn, flex: 1, opacity: valid ? 1 : 0.5 }}>{member.id ? "Save changes" : "Add member"}</button></div>
       </div>
     </div>
   );
