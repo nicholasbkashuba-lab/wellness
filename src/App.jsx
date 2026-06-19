@@ -1,14 +1,44 @@
 import React, { useState, useEffect, useMemo } from "react";
 
-// --- Web storage adapter -------------------------------------------------
-// On Claude this app used storage. On the open web we use the
-// browser's localStorage, which keeps the same simple async interface.
-// NOTE: localStorage is per-device/per-browser — data does not sync across
-// devices. Shared data across the whole front desk needs a hosted database.
+// --- Shared storage adapter ----------------------------------------------
+// Data lives in a hosted database, reached through the /api/store serverless
+// function, so every device/browser shares the same data and it persists
+// permanently. localStorage is kept as an offline cache + fallback, and the
+// first load on a fresh database migrates any pre-existing local data up.
+const API = "/api/store";
+const APP_KEY = import.meta.env.VITE_APP_ACCESS_KEY || "";
+const apiHeaders = APP_KEY ? { "x-app-key": APP_KEY } : {};
+
 const storage = {
-  async get(key) { try { const v = localStorage.getItem(key); return v == null ? null : { key, value: v }; } catch { return null; } },
-  async set(key, value) { try { localStorage.setItem(key, value); return { key, value }; } catch { return null; } },
-  async delete(key) { try { localStorage.removeItem(key); return { key, deleted: true }; } catch { return null; } },
+  async get(key) {
+    try {
+      const res = await fetch(`${API}?key=${encodeURIComponent(key)}`, { cache: "no-store", headers: apiHeaders });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.value != null) {
+          try { localStorage.setItem(key, data.value); } catch {}
+          return { key, value: data.value };
+        }
+        // Database is empty — migrate any existing local data up, one time.
+        let local = null; try { local = localStorage.getItem(key); } catch {}
+        if (local != null) { try { await storage.set(key, local); } catch {} return { key, value: local }; }
+        return null;
+      }
+    } catch {}
+    // Server unreachable — fall back to the local cache so the app still works.
+    try { const v = localStorage.getItem(key); return v == null ? null : { key, value: v }; } catch { return null; }
+  },
+  async set(key, value) {
+    try { localStorage.setItem(key, value); } catch {}
+    const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ key, value }) });
+    if (!res.ok) throw new Error("save failed");
+    return { key, value };
+  },
+  async delete(key) {
+    try { localStorage.removeItem(key); } catch {}
+    try { await fetch(`${API}?key=${encodeURIComponent(key)}`, { method: "DELETE", headers: apiHeaders }); } catch {}
+    return { key, deleted: true };
+  },
 };
 
 
