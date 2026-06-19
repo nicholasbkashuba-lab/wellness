@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 
 // --- Shared storage adapter ----------------------------------------------
 // Data lives in a hosted database, reached through the /api/store serverless
@@ -181,13 +181,44 @@ export default function App() {
   const [dayOpen, setDayOpen] = useState(null);
   const [toast, setToast] = useState("");
 
+  // Tracks the exact server payload we last applied, so the live-sync poll
+  // only re-renders when another device has actually changed the data.
+  const lastRawRef = useRef("");
+  const savingRef = useRef(false);
+
   useEffect(() => {
     (async () => {
-      try { const res = await storage.get(STORE_KEY); setStore(normalizeStore(res && res.value ? JSON.parse(res.value) : {})); }
+      try {
+        const res = await storage.get(STORE_KEY);
+        lastRawRef.current = res && res.value ? res.value : "";
+        setStore(normalizeStore(res && res.value ? JSON.parse(res.value) : {}));
+      }
       catch (e) { setStore(normalizeStore({})); }
       finally { setLoading(false); }
     })();
   }, []);
+
+  // Live sync: poll the shared store so edits made by any user on any device
+  // show up here automatically, without reloading the page.
+  useEffect(() => {
+    if (loading) return;
+    let cancelled = false;
+    const sync = async () => {
+      if (document.hidden || savingRef.current) return;
+      try {
+        const res = await storage.get(STORE_KEY);
+        if (cancelled || savingRef.current) return;
+        const remote = res && res.value ? res.value : null;
+        if (remote == null || remote === lastRawRef.current) return;
+        lastRawRef.current = remote;
+        setStore(normalizeStore(JSON.parse(remote)));
+      } catch {}
+    };
+    const id = setInterval(sync, 5000);
+    const onVisible = () => { if (!document.hidden) sync(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { cancelled = true; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [loading]);
 
   useEffect(() => {
     if (!unlocked) return;
@@ -196,7 +227,15 @@ export default function App() {
     return () => { clearTimeout(timer); evts.forEach((e) => window.removeEventListener(e, reset)); };
   }, [unlocked]);
 
-  const persist = async (next) => { setStore(next); try { await storage.set(STORE_KEY, JSON.stringify(next)); } catch (e) { flash("Couldn't save — try again"); } };
+  const persist = async (next) => {
+    setStore(next);
+    const raw = JSON.stringify(next);
+    lastRawRef.current = raw;
+    savingRef.current = true;
+    try { await storage.set(STORE_KEY, raw); }
+    catch (e) { flash("Couldn't save — try again"); }
+    finally { savingRef.current = false; }
+  };
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
 
   const mk = monthKey(monthDate);
