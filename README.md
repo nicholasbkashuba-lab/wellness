@@ -26,13 +26,41 @@ Vercel auto-detects Vite (build: `vite build`, output: `dist`). No extra config 
 ### Option C — let Claude Code do it
 Open this folder in Claude Code; its Vercel integration can deploy for you in one step.
 
+## Shared data across all devices (required for multi-user)
+
+Data is stored in a hosted Postgres database via the `/api/store` serverless
+function, so every device and browser shares the same data and it persists
+permanently. To turn this on, create the database once:
+
+1. In Vercel, open the **wellness** project → **Storage** tab → **Create Database**.
+2. Choose **Postgres** (Neon) → pick the region closest to your clinic → **Create**,
+   then **Connect** it to this project. Vercel injects the `POSTGRES_URL`
+   environment variables automatically.
+3. **Redeploy** (Deployments → latest → ⋯ → Redeploy) so the new env vars take effect.
+
+That's it — the app creates its own table on first use. Any data already entered
+on a device (stored locally) is migrated up to the database the first time that
+device loads against the live database.
+
+### Optional: lock down the data API (recommended)
+The `/api/store` endpoint is public by default. To keep casual visitors out, set a
+shared key in **Settings → Environment Variables** (both to the same long random value):
+
+- `APP_ACCESS_KEY` — checked by the server
+- `VITE_APP_ACCESS_KEY` — baked into the frontend
+
+Generate one with `openssl rand -hex 24`, then redeploy. See `.env.example`.
+
 ## Important notes
-- **Data is per-device.** This build stores everything in the browser's localStorage,
-  so each device/browser has its own data and nothing syncs between them. Set up the
-  tablet you'll actually use day to day, and back up via the in-app CSV exports.
-- **The PIN login is a privacy lock, not real security.** It keeps casual eyes out and
-  attributes check-ins, but it can be bypassed by someone with the device. For real
-  accounts, encryption, shared data across devices, and automatic sending/billing,
-  this needs the hosted version with a database + auth + an SMS/email service + Stripe.
+- **Until the database is connected, data is per-device.** Without the steps above the
+  app falls back to the browser's localStorage (each device separate). After connecting,
+  data is shared and permanent. Back up anytime via the in-app CSV exports.
+- **Last write wins.** The whole console state is saved as one document, so if two
+  people save edits at the exact same moment, the later save overwrites the earlier one.
+  Fine for a front desk; not built for heavy simultaneous editing.
+- **Not a substitute for real auth / HIPAA compliance.** The PIN is a privacy lock, and
+  the optional API key is light obfuscation, not strong security — anyone with the app
+  link and key can read/write. For regulated patient data you still need real per-user
+  accounts, a host willing to sign a BAA, and audit logging.
 - First load shows the setup screen to create a master passcode. Add per-staff PINs
   under Manage staff.
