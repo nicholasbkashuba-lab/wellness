@@ -163,7 +163,23 @@ function invoiceText(member, mLabel, inv) {
   return [CLINIC.name, CLINIC.addr, "", `Invoice ${inv.invNo}`, `Date: ${new Date().toLocaleDateString("en-US")}`, "", `Bill to: ${member.name}`, member.email || member.phone || "", "", `Wellness Membership — ${mLabel} .......... ${money2(inv.amount)}`, inv.paid > 0 ? `Payments received .......... -${money2(inv.paid)}` : "", "", inv.paidInFull ? "PAID IN FULL — thank you!" : `Balance due: ${money2(inv.balance)}`, "", "Pay by cash, check, or card at the front desk.", CLINIC.tagline].filter((l) => l !== "").join("\n");
 }
 function invoiceHTML(member, mLabel, inv) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${inv.invNo}</title><style>body{font-family:Inter,Arial,sans-serif;color:#22343B;max-width:640px;margin:40px auto;padding:0 24px}.h{border-bottom:3px solid #F4A261;padding-bottom:16px;margin-bottom:24px}.name{font-family:Georgia,serif;color:#1A5F7A;font-size:22px;font-weight:700;margin:6px 0 0}.muted{color:#5C6B72;font-size:14px}.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.tot{font-weight:700;font-size:18px}.tag{color:#52796F;font-style:italic;margin-top:24px}.paid{color:#52796F;font-weight:700}.due{color:#C75B39;font-weight:700}@media print{body{margin:0}}</style></head><body><div class="h"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:56px;display:block"/><p class="name">${CLINIC.name}</p><p class="muted">${CLINIC.addr}</p></div><p><strong>Invoice ${inv.invNo}</strong><br><span class="muted">Date: ${new Date().toLocaleDateString("en-US")}</span></p><p><strong>Bill to:</strong> ${member.name}<br><span class="muted">${member.email || member.phone || ""}</span></p><div class="row"><span>Wellness Membership — ${mLabel}</span><span>${money2(inv.amount)}</span></div>${inv.paid > 0 ? `<div class="row"><span>Payments received</span><span>-${money2(inv.paid)}</span></div>` : ""}<div class="row tot"><span>${inv.paidInFull ? "Status" : "Balance due"}</span><span class="${inv.paidInFull ? "paid" : "due"}">${inv.paidInFull ? "Paid in full" : money2(inv.balance)}</span></div><p class="muted" style="margin-top:24px">Pay by cash, check, or card at the front desk.</p><p class="tag">${CLINIC.tagline}</p></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${inv.invNo}</title><style>body{font-family:Inter,Arial,sans-serif;color:#22343B;max-width:640px;margin:40px auto;padding:0 24px}.h{border-bottom:3px solid #F4A261;padding-bottom:16px;margin-bottom:24px}.name{font-family:Georgia,serif;color:#1A5F7A;font-size:22px;font-weight:700;margin:6px 0 0}.muted{color:#5C6B72;font-size:14px}.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.tot{font-weight:700;font-size:18px}.tag{color:#52796F;font-style:italic;margin-top:24px}.paid{color:#52796F;font-weight:700}.due{color:#C75B39;font-weight:700}@media print{body{margin:0}}</style></head><body><div class="h"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:56px;display:block"/><p class="name">${CLINIC.name}</p><p class="muted">${CLINIC.addr}</p></div><p><strong>Invoice ${inv.invNo}</strong><br><span class="muted">Date: ${new Date().toLocaleDateString("en-US")}</span></p><p><strong>Bill to:</strong> ${member.name}<br><span class="muted">${member.email || member.phone || ""}</span></p><div class="row"><span>Wellness Membership — ${mLabel}</span><span>${money2(inv.amount)}</span></div>${inv.paid > 0 ? `<div class="row"><span>Payments received</span><span>-${money2(inv.paid)}</span></div>` : ""}<div class="row tot"><span>${inv.paidInFull ? "Status" : "Balance due"}</span><span class="${inv.paidInFull ? "paid" : "due"}">${inv.paidInFull ? "Paid in full" : money2(inv.balance)}</span></div><p class="muted" style="margin-top:24px">Pay by cash, check, or card at the front desk.</p><p class="tag" style="text-align:center">${CLINIC.tagline}</p><div style="margin-top:32px;border-top:1px solid #eee;padding-top:16px;text-align:center"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:42px;display:inline-block"/></div></body></html>`;
+}
+
+// A clean, print-ready receipt for a single payment (logo top and bottom).
+function receiptHTML(member, mLabel, pay) {
+  const no = `RCPT-${String(mLabel || "").replace(/\s/g, "").toUpperCase().slice(0, 6)}-${String(member.id || "").slice(0, 4).toUpperCase()}`;
+  const d = pay.date ? new Date(pay.date + "T12:00:00") : new Date();
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${no}</title><style>body{font-family:Inter,Arial,sans-serif;color:#22343B;max-width:640px;margin:40px auto;padding:0 24px}.h{border-bottom:3px solid #F4A261;padding-bottom:16px;margin-bottom:24px}.name{font-family:Georgia,serif;color:#1A5F7A;font-size:22px;font-weight:700;margin:6px 0 0}.muted{color:#5C6B72;font-size:14px}.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.tot{font-weight:700;font-size:18px}.paid{color:#52796F;font-weight:700}.tag{color:#52796F;font-style:italic;margin-top:24px;text-align:center}.foot{margin-top:32px;border-top:1px solid #eee;padding-top:16px;text-align:center}@media print{body{margin:0}}</style></head><body><div class="h"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:56px;display:block"/><p class="name">${CLINIC.name}</p><p class="muted">${CLINIC.addr}</p></div><p style="font-family:Georgia,serif;color:#1A5F7A;font-size:20px;font-weight:700;margin:0 0 8px">Payment Receipt</p><p><strong>${no}</strong><br><span class="muted">Date: ${d.toLocaleDateString("en-US")}</span></p><p><strong>Received from:</strong> ${member.name}<br><span class="muted">${member.email || member.phone || ""}</span></p><div class="row"><span>Wellness Membership — ${mLabel}</span><span>${money2(pay.amount)}</span></div><div class="row"><span>Payment method</span><span>${pay.method || ""}</span></div>${pay.note ? `<div class="row"><span>Note</span><span>${pay.note}</span></div>` : ""}<div class="row tot"><span>Amount paid</span><span class="paid">${money2(pay.amount)}</span></div><p class="muted" style="margin-top:16px">Thank you for your payment.</p><p class="tag">${CLINIC.tagline}</p><div class="foot"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:42px;display:inline-block"/></div></body></html>`;
+}
+function printReceipt(member, mLabel, pay) {
+  try {
+    const w = window.open("", "_blank");
+    if (!w) { alert("Allow pop-ups for this site to print receipts."); return; }
+    w.document.write(receiptHTML(member, mLabel, pay));
+    w.document.close(); w.focus();
+    setTimeout(() => { try { w.print(); } catch (e) {} }, 350);
+  } catch (e) { alert("Couldn't open the receipt window."); }
 }
 
 export default function App() {
@@ -258,7 +274,7 @@ export default function App() {
   const rows = monthMembers.map((m) => ({ m, ...monthState(m, monthPayments[m.id]?.entries) }));
   const needs = rows.filter((r) => r.state === "outstanding" || r.state === "partial").sort((a, b) => b.remaining - a.remaining);
   const settled = rows.filter((r) => r.state === "paid" || r.state === "comp").sort((a, b) => a.m.name.localeCompare(b.m.name));
-  const collected = rows.reduce((s, r) => s + r.paid, 0);
+  const collected = rows.reduce((s, r) => s + (r.state === "comp" ? 0 : r.paid), 0);
   const outstandingAmt = needs.reduce((s, r) => s + r.remaining, 0);
 
   const methodTotals = useMemo(() => {
@@ -377,8 +393,8 @@ export default function App() {
                   return (
                     <>
                       {q && fNeeds.length === 0 && fSettled.length === 0 && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 14, color: C.inkSoft, padding: "8px 2px" }}>No members match “{billQ}”.</div>}
-                      {fNeeds.length > 0 && <Section title={`Needs payment · ${fNeeds.length}`} color={C.red}>{fNeeds.map((r) => <NeedsRow key={r.m.id} row={r} reminder={lastReminder(r.m)} expanded={expanded === r.m.id} onToggle={() => setExpanded(expanded === r.m.id ? null : r.m.id)} onOpen={() => setDetailId(r.m.id)} onRecord={(d) => addPayment(r.m, d)} onRemind={() => setReminderMember(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
-                      {fSettled.length > 0 && <Section title={`Settled · ${fSettled.length}`} color={C.sage}>{fSettled.map((r) => <SettledRow key={r.m.id} row={r} entries={monthPayments[r.m.id]?.entries || []} onOpen={() => setDetailId(r.m.id)} onClear={() => clearMonth(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
+                      {fNeeds.length > 0 && <Section title={`Needs payment · ${fNeeds.length}`} color={C.red}>{fNeeds.map((r) => <NeedsRow key={r.m.id} row={r} mLabel={monthLabel(monthDate)} reminder={lastReminder(r.m)} expanded={expanded === r.m.id} onToggle={() => setExpanded(expanded === r.m.id ? null : r.m.id)} onOpen={() => setDetailId(r.m.id)} onRecord={(d) => addPayment(r.m, d)} onRemind={() => setReminderMember(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
+                      {fSettled.length > 0 && <Section title={`Settled · ${fSettled.length}`} color={C.sage}>{fSettled.map((r) => <SettledRow key={r.m.id} row={r} mLabel={monthLabel(monthDate)} entries={monthPayments[r.m.id]?.entries || []} onOpen={() => setDetailId(r.m.id)} onClear={() => clearMonth(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
                     </>
                   );
                 })()}
@@ -542,7 +558,7 @@ function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outsta
 }
 
 // =================== BILLING ROWS ===================
-function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemind, onInvoice }) {
+function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemind, onInvoice, mLabel }) {
   const { m, state, paid, remaining } = row;
   const remindLabel = reminder ? (daysAgo(reminder) === 0 ? "Reminded today" : `Reminded ${daysAgo(reminder)}d ago`) : null;
   return (
@@ -553,22 +569,23 @@ function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemin
         <button className="fr-btn" onClick={onRemind} style={ghostBtn}>Remind</button>
         <button className="fr-btn" onClick={onToggle} style={{ ...primaryBtn, background: expanded ? C.tealDark : C.coral }}>{expanded ? "Close" : "Pay"}</button>
       </div>
-      {expanded && <PayPanel member={m} defaultAmount={remaining} onRecord={onRecord} />}
+      {expanded && <PayPanel member={m} mLabel={mLabel} defaultAmount={remaining} onRecord={onRecord} />}
     </div>
   );
 }
-function SettledRow({ row, entries, onOpen, onClear, onInvoice }) {
+function SettledRow({ row, entries, onOpen, onClear, onInvoice, mLabel }) {
   const { m, state, paid } = row;
   const summary = state === "comp" ? "Comped this month" : `${money(paid)} · ${entries.map((e) => e.method).join(", ")}`;
   return (
     <div className="fr-row" style={{ ...rowBase, background: C.greenBg }}>
       <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={onOpen}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}{state === "comp" && <Badge tone="gold">Comp</Badge>}</div><div style={{ fontSize: 13, color: C.sage, fontFamily: "Inter, sans-serif", fontWeight: 500 }}>{summary}</div></div>
+      {paid > 0 && <button className="fr-btn" onClick={() => printReceipt(m, mLabel, { amount: paid, method: entries.map((e) => e.method).join(", "), date: (entries[entries.length - 1] || {}).date })} style={ghostBtn}>Print receipt</button>}
       <button className="fr-btn" onClick={onInvoice} style={ghostBtn}>Receipt</button>
       <button className="fr-btn" onClick={onClear} style={ghostBtn}>Clear</button>
     </div>
   );
 }
-function PayPanel({ member, defaultAmount, onRecord }) {
+function PayPanel({ member, mLabel, defaultAmount, onRecord }) {
   const [method, setMethod] = useState(member.method || "Cash");
   const [amount, setAmount] = useState(defaultAmount ?? member.rate ?? DEFAULT_RATE);
   const [date, setDate] = useState(todayISO()); const [note, setNote] = useState("");
@@ -576,7 +593,10 @@ function PayPanel({ member, defaultAmount, onRecord }) {
     <div style={{ background: C.cream, borderTop: `1px solid ${C.line}`, padding: 14 }}>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{METHODS.map((mth) => <button key={mth} className="fr-btn" onClick={() => { setMethod(mth); if (mth === "Comp") setAmount(0); }} style={{ ...chip, background: method === mth ? C.teal : "#fff", color: method === mth ? "#fff" : C.ink, borderColor: method === mth ? C.teal : C.line }}>{mth}</button>)}</div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}><Field label="Amount"><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} style={{ ...input, width: 110 }} /></Field><Field label="Date received"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...input, width: 160 }} /></Field><Field label="Note (optional)" grow><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Check #, etc." style={input} /></Field></div>
-      <button className="fr-btn" onClick={() => onRecord({ method, amount, date, note })} style={{ ...primaryBtn, background: C.sage, marginTop: 12, width: "100%" }}>Record {money(amount)} · {method}</button>
+      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+        <button className="fr-btn" onClick={() => onRecord({ method, amount, date, note })} style={{ ...primaryBtn, background: C.sage, flex: 1, minWidth: 140 }}>Record {money(amount)} · {method}</button>
+        <button className="fr-btn" onClick={() => { onRecord({ method, amount, date, note }); printReceipt(member, mLabel, { amount: Number(amount) || 0, method, date, note }); }} style={{ ...ghostBtn }}>Record &amp; print receipt</button>
+      </div>
     </div>
   );
 }
@@ -762,6 +782,7 @@ function InvoiceModal({ member, mk, mLabel, state, onClose, onSent }) {
           <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${C.cream}`, fontFamily: "Inter, sans-serif", fontSize: 14, marginTop: 10 }}><span>Wellness Membership — {mLabel}</span><span>{money2(inv.amount)}</span></div>
           {inv.paid > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontFamily: "Inter, sans-serif", fontSize: 14, color: C.inkSoft }}><span>Payments received</span><span>-{money2(inv.paid)}</span></div>}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", fontFamily: "Inter, sans-serif", fontWeight: 700, fontSize: 16 }}><span>{paidInFull ? "Status" : "Balance due"}</span><span style={{ color: paidInFull ? C.sage : C.red }}>{paidInFull ? "Paid in full" : money2(inv.balance)}</span></div>
+          <div style={{ borderTop: `1px solid ${C.cream}`, marginTop: 12, paddingTop: 12, textAlign: "center" }}><img src={LOGO} alt="First Rehabilitation Inc." style={{ height: 34, display: "inline-block" }} /><div style={{ fontFamily: "Inter, sans-serif", fontSize: 11, color: C.inkSoft, marginTop: 4, fontStyle: "italic" }}>{CLINIC.tagline}</div></div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button className="fr-btn" onClick={() => { download(invoiceHTML(member, mLabel, inv), `${invNo}.html`, "text/html"); onSent("downloaded"); }} style={primaryBtn}>Download (print/PDF)</button>
