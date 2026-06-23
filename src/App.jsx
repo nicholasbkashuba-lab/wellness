@@ -176,6 +176,7 @@ export default function App() {
   const [calDate, setCalDate] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const [attDay, setAttDay] = useState(todayISO());
   const [expanded, setExpanded] = useState(null);
+  const [billQ, setBillQ] = useState("");
   const [memberModal, setMemberModal] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [reminderMember, setReminderMember] = useState(null);
@@ -368,8 +369,19 @@ export default function App() {
             </div>
             {monthMembers.length === 0 ? <Empty title="No members for this month" body="Add wellness members on the Members tab and they'll appear here automatically." action={() => setView("members")} actionLabel="Go to Members" /> : (
               <>
-                {needs.length > 0 && <Section title={`Needs payment · ${needs.length}`} color={C.red}>{needs.map((r) => <NeedsRow key={r.m.id} row={r} reminder={lastReminder(r.m)} expanded={expanded === r.m.id} onToggle={() => setExpanded(expanded === r.m.id ? null : r.m.id)} onOpen={() => setDetailId(r.m.id)} onRecord={(d) => addPayment(r.m, d)} onRemind={() => setReminderMember(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
-                {settled.length > 0 && <Section title={`Settled · ${settled.length}`} color={C.sage}>{settled.map((r) => <SettledRow key={r.m.id} row={r} entries={monthPayments[r.m.id]?.entries || []} onOpen={() => setDetailId(r.m.id)} onClear={() => clearMonth(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
+                <input value={billQ} onChange={(e) => setBillQ(e.target.value)} placeholder="Search members by name…" style={{ ...input, marginBottom: 14 }} />
+                {(() => {
+                  const q = billQ.trim().toLowerCase();
+                  const fNeeds = q ? needs.filter((r) => r.m.name.toLowerCase().includes(q)) : needs;
+                  const fSettled = q ? settled.filter((r) => r.m.name.toLowerCase().includes(q)) : settled;
+                  return (
+                    <>
+                      {q && fNeeds.length === 0 && fSettled.length === 0 && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 14, color: C.inkSoft, padding: "8px 2px" }}>No members match “{billQ}”.</div>}
+                      {fNeeds.length > 0 && <Section title={`Needs payment · ${fNeeds.length}`} color={C.red}>{fNeeds.map((r) => <NeedsRow key={r.m.id} row={r} reminder={lastReminder(r.m)} expanded={expanded === r.m.id} onToggle={() => setExpanded(expanded === r.m.id ? null : r.m.id)} onOpen={() => setDetailId(r.m.id)} onRecord={(d) => addPayment(r.m, d)} onRemind={() => setReminderMember(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
+                      {fSettled.length > 0 && <Section title={`Settled · ${fSettled.length}`} color={C.sage}>{fSettled.map((r) => <SettledRow key={r.m.id} row={r} entries={monthPayments[r.m.id]?.entries || []} onOpen={() => setDetailId(r.m.id)} onClear={() => clearMonth(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
+                    </>
+                  );
+                })()}
                 <div style={{ display: "flex", gap: 14, flexWrap: "wrap", margin: "16px 0 8px", fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft }}><span>Cash {money(methodTotals.Cash)}</span><span>Check {money(methodTotals.Check)}</span><span>Card {money(methodTotals.Card)}</span><span>Recurring {money(methodTotals.Recurring)}</span><button className="fr-btn" onClick={exportMonthCSV} style={linkBtn}>Export this month</button></div>
               </>
             )}
@@ -718,10 +730,11 @@ function ReminderModal({ member, mLabel, state, onClose, onSent }) {
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}><h2 style={{ fontFamily: "'Playfair Display', serif", color: C.teal, margin: 0, fontSize: 22 }}>Reminder · {member.name}</h2><button className="fr-btn" onClick={onClose} style={{ ...ghostBtn, fontSize: 18, padding: "4px 12px" }}>✕</button></div>
-        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, margin: "10px 0 14px" }}>Opens your email or Messages app with this prefilled — review and send there.</div>
+        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, margin: "10px 0 14px" }}>Opens Gmail (or your email / Messages app) with this prefilled — review and send there. Gmail sends from whichever Google account you're signed into.</div>
         <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={5} style={{ ...input, resize: "vertical", marginBottom: 14 }} />
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {member.email ? <a href={`mailto:${member.email}?subject=${enc(subject)}&body=${enc(msg)}`} onClick={() => onSent("email")} className="fr-btn" style={{ ...primaryBtn, textDecoration: "none", display: "inline-block" }}>Email</a> : <button className="fr-btn" disabled style={{ ...primaryBtn, opacity: 0.4 }}>Email (no address)</button>}
+          {member.email ? <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${enc(member.email)}&su=${enc(subject)}&body=${enc(msg)}`} target="_blank" rel="noopener noreferrer" onClick={() => onSent("gmail")} className="fr-btn" style={{ ...primaryBtn, textDecoration: "none", display: "inline-block" }}>Gmail</a> : <button className="fr-btn" disabled style={{ ...primaryBtn, opacity: 0.4 }}>Gmail (no address)</button>}
+          {member.email ? <a href={`mailto:${member.email}?subject=${enc(subject)}&body=${enc(msg)}`} onClick={() => onSent("email")} className="fr-btn" style={{ ...ghostBtn, textDecoration: "none", display: "inline-block" }}>Default email app</a> : null}
           {phone ? <a href={`sms:${phone}?body=${enc(msg)}`} onClick={() => onSent("text")} className="fr-btn" style={{ ...primaryBtn, background: C.sage, textDecoration: "none", display: "inline-block" }}>Text</a> : <button className="fr-btn" disabled style={{ ...primaryBtn, background: C.sage, opacity: 0.4 }}>Text (no number)</button>}
           <button className="fr-btn" onClick={() => { navigator.clipboard?.writeText(msg); onSent("copied"); }} style={ghostBtn}>Copy</button>
         </div>
