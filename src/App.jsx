@@ -162,15 +162,55 @@ const downloadCSV = (rows, filename) => download(rows.map((r) => r.map((c) => `"
 function invoiceText(member, mLabel, inv) {
   return [CLINIC.name, CLINIC.addr, "", `Invoice ${inv.invNo}`, `Date: ${new Date().toLocaleDateString("en-US")}`, "", `Bill to: ${member.name}`, member.email || member.phone || "", "", `Wellness Membership — ${mLabel} .......... ${money2(inv.amount)}`, inv.paid > 0 ? `Payments received .......... -${money2(inv.paid)}` : "", "", inv.paidInFull ? "PAID IN FULL — thank you!" : `Balance due: ${money2(inv.balance)}`, "", "Pay by cash, check, or card at the front desk.", CLINIC.tagline].filter((l) => l !== "").join("\n");
 }
+const DOC_CSS = `*{box-sizing:border-box}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#22343B;margin:0;background:#fff}
+.page{max-width:720px;margin:0 auto;padding:48px 44px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+.brand img{height:54px;display:block;margin-bottom:10px}
+.brand .clinic{font-family:Georgia,'Times New Roman',serif;font-size:18px;font-weight:700;color:#1A5F7A}
+.brand .addr{font-size:12px;color:#5C6B72;line-height:1.5;margin-top:2px;max-width:240px}
+.docbox{text-align:right}
+.docbox .type{font-size:30px;font-weight:800;letter-spacing:2px;color:#1A5F7A;margin:0}
+.docbox .meta{font-size:12px;color:#5C6B72;margin-top:8px;line-height:1.8}
+.docbox .meta b{color:#22343B}
+.rule{height:4px;background:#1A5F7A;border-radius:3px;margin:20px 0 26px}
+.billto{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#8A969B;margin-bottom:3px}
+.billname{font-size:16px;font-weight:700;color:#22343B}
+.billsub{font-size:13px;color:#5C6B72;margin-top:2px}
+table{width:100%;border-collapse:collapse;margin-top:30px}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#8A969B;border-bottom:2px solid #E7DECB;padding:0 0 10px}
+th.r,td.r{text-align:right}
+td{padding:14px 2px;border-bottom:1px solid #F0EADD;font-size:14px}
+.totals{margin-top:20px;margin-left:auto;width:300px}
+.grand{display:flex;justify-content:space-between;padding:14px 18px;border-radius:12px;font-size:16px;font-weight:800}
+.grand.due{background:#FBE9E0;color:#C75B39}
+.grand.paid{background:#E7F0EC;color:#3E7A63}
+.note{margin-top:34px;font-size:13px;color:#5C6B72;line-height:1.6}
+.foot{margin-top:48px;border-top:1px solid #E7DECB;padding-top:20px;text-align:center}
+.foot img{height:34px}
+.foot .tag{font-style:italic;color:#3E7A63;font-size:13px;margin-top:8px}
+.foot .fine{font-size:11px;color:#98A4A9;margin-top:6px}
+@media print{.page{padding:24px}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}`;
+const longDate = (d) => d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+function docPage(title, inner) { return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>${DOC_CSS}</style></head><body><div class="page">${inner}</div></body></html>`; }
+function docHeader(type, idLabel, dateStr) { return `<div class="top"><div class="brand"><img src="${LOGO}" alt="${CLINIC.name}"/><div class="clinic">${CLINIC.name}</div><div class="addr">${CLINIC.addr}</div></div><div class="docbox"><div class="type">${type}</div><div class="meta"><div><b>${idLabel}</b></div><div>${dateStr}</div></div></div></div><div class="rule"></div>`; }
+function docParty(label, name, contact) { return `<div class="billto">${label}</div><div class="billname">${name}</div>${contact ? `<div class="billsub">${contact}</div>` : ""}`; }
+function docFooter() { return `<div class="foot"><img src="${LOGO}" alt="${CLINIC.name}"/><div class="tag">${CLINIC.tagline}</div><div class="fine">${CLINIC.name} &middot; ${CLINIC.addr}</div></div>`; }
+
 function invoiceHTML(member, mLabel, inv) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${inv.invNo}</title><style>body{font-family:Inter,Arial,sans-serif;color:#22343B;max-width:640px;margin:40px auto;padding:0 24px}.h{border-bottom:3px solid #F4A261;padding-bottom:16px;margin-bottom:24px}.name{font-family:Georgia,serif;color:#1A5F7A;font-size:22px;font-weight:700;margin:6px 0 0}.muted{color:#5C6B72;font-size:14px}.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.tot{font-weight:700;font-size:18px}.tag{color:#52796F;font-style:italic;margin-top:24px}.paid{color:#52796F;font-weight:700}.due{color:#C75B39;font-weight:700}@media print{body{margin:0}}</style></head><body><div class="h"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:56px;display:block"/><p class="name">${CLINIC.name}</p><p class="muted">${CLINIC.addr}</p></div><p><strong>Invoice ${inv.invNo}</strong><br><span class="muted">Date: ${new Date().toLocaleDateString("en-US")}</span></p><p><strong>Bill to:</strong> ${member.name}<br><span class="muted">${member.email || member.phone || ""}</span></p><div class="row"><span>Wellness Membership — ${mLabel}</span><span>${money2(inv.amount)}</span></div>${inv.paid > 0 ? `<div class="row"><span>Payments received</span><span>-${money2(inv.paid)}</span></div>` : ""}<div class="row tot"><span>${inv.paidInFull ? "Status" : "Balance due"}</span><span class="${inv.paidInFull ? "paid" : "due"}">${inv.paidInFull ? "Paid in full" : money2(inv.balance)}</span></div><p class="muted" style="margin-top:24px">Pay by cash, check, or card at the front desk.</p><p class="tag" style="text-align:center">${CLINIC.tagline}</p><div style="margin-top:32px;border-top:1px solid #eee;padding-top:16px;text-align:center"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:42px;display:inline-block"/></div></body></html>`;
+  const contact = [member.email, member.phone].filter(Boolean).join(" · ");
+  const rows = `<tr><td>Wellness Membership — ${mLabel}</td><td class="r">${money2(inv.amount)}</td></tr>` + (inv.paid > 0 ? `<tr><td>Payment received</td><td class="r">-${money2(inv.paid)}</td></tr>` : "");
+  const grand = `<div class="totals"><div class="grand ${inv.paidInFull ? "paid" : "due"}"><span>${inv.paidInFull ? "Paid in full" : "Balance due"}</span><span>${inv.paidInFull ? money2(inv.paid || inv.amount) : money2(inv.balance)}</span></div></div>`;
+  const note = inv.paidInFull ? "Thank you — your wellness membership for this period is paid in full." : "Please remit payment by cash, check, or card at the front desk. Thank you!";
+  return docPage(`${inv.paidInFull ? "Receipt" : "Invoice"} ${inv.invNo}`, docHeader(inv.paidInFull ? "RECEIPT" : "INVOICE", inv.invNo, longDate(new Date())) + docParty("Bill to", member.name, contact) + `<table><thead><tr><th>Description</th><th class="r">Amount</th></tr></thead><tbody>${rows}</tbody></table>` + grand + `<div class="note">${note}</div>` + docFooter());
 }
 
-// A clean, print-ready receipt for a single payment (logo top and bottom).
+// A clean, print-ready receipt for a single payment.
 function receiptHTML(member, mLabel, pay) {
   const no = `RCPT-${String(mLabel || "").replace(/\s/g, "").toUpperCase().slice(0, 6)}-${String(member.id || "").slice(0, 4).toUpperCase()}`;
   const d = pay.date ? new Date(pay.date + "T12:00:00") : new Date();
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${no}</title><style>body{font-family:Inter,Arial,sans-serif;color:#22343B;max-width:640px;margin:40px auto;padding:0 24px}.h{border-bottom:3px solid #F4A261;padding-bottom:16px;margin-bottom:24px}.name{font-family:Georgia,serif;color:#1A5F7A;font-size:22px;font-weight:700;margin:6px 0 0}.muted{color:#5C6B72;font-size:14px}.row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.tot{font-weight:700;font-size:18px}.paid{color:#52796F;font-weight:700}.tag{color:#52796F;font-style:italic;margin-top:24px;text-align:center}.foot{margin-top:32px;border-top:1px solid #eee;padding-top:16px;text-align:center}@media print{body{margin:0}}</style></head><body><div class="h"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:56px;display:block"/><p class="name">${CLINIC.name}</p><p class="muted">${CLINIC.addr}</p></div><p style="font-family:Georgia,serif;color:#1A5F7A;font-size:20px;font-weight:700;margin:0 0 8px">Payment Receipt</p><p><strong>${no}</strong><br><span class="muted">Date: ${d.toLocaleDateString("en-US")}</span></p><p><strong>Received from:</strong> ${member.name}<br><span class="muted">${member.email || member.phone || ""}</span></p><div class="row"><span>Wellness Membership — ${mLabel}</span><span>${money2(pay.amount)}</span></div><div class="row"><span>Payment method</span><span>${pay.method || ""}</span></div>${pay.note ? `<div class="row"><span>Note</span><span>${pay.note}</span></div>` : ""}<div class="row tot"><span>Amount paid</span><span class="paid">${money2(pay.amount)}</span></div><p class="muted" style="margin-top:16px">Thank you for your payment.</p><p class="tag">${CLINIC.tagline}</p><div class="foot"><img src="${LOGO}" alt="First Rehabilitation Inc." style="height:42px;display:inline-block"/></div></body></html>`;
+  const contact = [member.email, member.phone].filter(Boolean).join(" · ");
+  const rows = `<tr><td>Wellness Membership — ${mLabel}</td><td class="r">${money2(pay.amount)}</td></tr><tr><td>Payment method</td><td class="r">${pay.method || ""}</td></tr>` + (pay.note ? `<tr><td>Note</td><td class="r">${pay.note}</td></tr>` : "");
+  return docPage(`Receipt ${no}`, docHeader("RECEIPT", no, longDate(d)) + docParty("Received from", member.name, contact) + `<table><thead><tr><th>Description</th><th class="r">Amount</th></tr></thead><tbody>${rows}</tbody></table>` + `<div class="totals"><div class="grand paid"><span>Amount paid</span><span>${money2(pay.amount)}</span></div></div>` + `<div class="note">Thank you for your payment.</div>` + docFooter());
 }
 function printReceipt(member, mLabel, pay) {
   try {
@@ -781,39 +821,32 @@ function InvoiceModal({ member, mk, mLabel, state, onClose, onSent }) {
   const inv = { amount: state.rate, paid: state.paid, balance: state.remaining, paidInFull, invNo };
   const text = invoiceText(member, mLabel, inv);
   const subject = `${CLINIC.name} — ${paidInFull ? "Receipt" : "Invoice"} ${invNo}`;
-  const [emailState, setEmailState] = useState("idle"); // idle | sending | sent | error
-  const [emailMsg, setEmailMsg] = useState("");
-  const sendFromClinic = async () => {
-    setEmailState("sending"); setEmailMsg("");
-    try {
-      const r = await fetch("/api/send-invoice", { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ to: member.email, subject, html: invoiceHTML(member, mLabel, inv) }) });
-      const data = await r.json().catch(() => ({}));
-      if (r.ok) { setEmailState("sent"); onSent("emailed from clinic"); }
-      else { setEmailState("error"); setEmailMsg(data.error || `Error ${r.status}`); }
-    } catch (e) { setEmailState("error"); setEmailMsg(String((e && e.message) || e)); }
-  };
+  const dateStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const contact = [member.email, member.phone].filter(Boolean).join(" · ");
   return (
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}><h2 style={{ fontFamily: "'Playfair Display', serif", color: C.teal, margin: 0, fontSize: 22 }}>{paidInFull ? "Receipt" : "Invoice"}</h2><button className="fr-btn" onClick={onClose} style={{ ...ghostBtn, fontSize: 18, padding: "4px 12px" }}>✕</button></div>
-        <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, margin: "14px 0", background: "#fff" }}>
-          <div style={{ borderBottom: `3px solid ${C.coral}`, paddingBottom: 10, marginBottom: 12 }}><img src={LOGO} alt="First Rehabilitation Inc." style={{ height: 42, display: "block", marginBottom: 6 }} /><div style={{ fontFamily: "'Playfair Display', serif", color: C.teal, fontWeight: 700, fontSize: 16 }}>{CLINIC.name}</div><div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{CLINIC.addr}</div></div>
-          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.ink }}><strong>{invNo}</strong> · {new Date().toLocaleDateString("en-US")}</div>
-          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.ink, marginTop: 8 }}><strong>Bill to:</strong> {member.name}{member.email || member.phone ? <span style={{ color: C.inkSoft }}> · {member.email || member.phone}</span> : ""}</div>
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${C.cream}`, fontFamily: "Inter, sans-serif", fontSize: 14, marginTop: 10 }}><span>Wellness Membership — {mLabel}</span><span>{money2(inv.amount)}</span></div>
-          {inv.paid > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontFamily: "Inter, sans-serif", fontSize: 14, color: C.inkSoft }}><span>Payments received</span><span>-{money2(inv.paid)}</span></div>}
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", fontFamily: "Inter, sans-serif", fontWeight: 700, fontSize: 16 }}><span>{paidInFull ? "Status" : "Balance due"}</span><span style={{ color: paidInFull ? C.sage : C.red }}>{paidInFull ? "Paid in full" : money2(inv.balance)}</span></div>
-          <div style={{ borderTop: `1px solid ${C.cream}`, marginTop: 12, paddingTop: 12, textAlign: "center" }}><img src={LOGO} alt="First Rehabilitation Inc." style={{ height: 34, display: "inline-block" }} /><div style={{ fontFamily: "Inter, sans-serif", fontSize: 11, color: C.inkSoft, marginTop: 4, fontStyle: "italic" }}>{CLINIC.tagline}</div></div>
+        <div style={{ border: `1px solid ${C.line}`, borderRadius: 14, padding: 22, margin: "6px 0 16px", background: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+            <div><img src={LOGO} alt={CLINIC.name} style={{ height: 44, display: "block", marginBottom: 8 }} /><div style={{ fontFamily: "'Playfair Display', serif", color: C.teal, fontWeight: 700, fontSize: 15 }}>{CLINIC.name}</div><div style={{ fontFamily: "Inter, sans-serif", fontSize: 11, color: C.inkSoft, maxWidth: 180, lineHeight: 1.4 }}>{CLINIC.addr}</div></div>
+            <div style={{ textAlign: "right" }}><div style={{ fontFamily: "Inter, sans-serif", fontWeight: 800, letterSpacing: 1.5, color: C.teal, fontSize: 20 }}>{paidInFull ? "RECEIPT" : "INVOICE"}</div><div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.ink, marginTop: 6, fontWeight: 600 }}>{invNo}</div><div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{dateStr}</div></div>
+          </div>
+          <div style={{ height: 3, background: C.teal, borderRadius: 3, margin: "16px 0" }} />
+          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: C.inkSoft }}>Bill to</div>
+          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 15, fontWeight: 700, color: C.ink }}>{member.name}</div>
+          {contact && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{contact}</div>}
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 0 10px", borderBottom: `1px solid ${C.cream}`, fontFamily: "Inter, sans-serif", fontSize: 14, marginTop: 16 }}><span>Wellness Membership — {mLabel}</span><span>{money2(inv.amount)}</span></div>
+          {inv.paid > 0 && <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontFamily: "Inter, sans-serif", fontSize: 14, color: C.inkSoft, borderBottom: `1px solid ${C.cream}` }}><span>Payment received</span><span>-{money2(inv.paid)}</span></div>}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", marginTop: 14, borderRadius: 10, background: paidInFull ? C.greenBg : C.redBg, fontFamily: "Inter, sans-serif", fontWeight: 800, fontSize: 16, color: paidInFull ? C.sage : C.red }}><span>{paidInFull ? "Paid in full" : "Balance due"}</span><span>{paidInFull ? money2(inv.paid || inv.amount) : money2(inv.balance)}</span></div>
+          <div style={{ borderTop: `1px solid ${C.cream}`, marginTop: 16, paddingTop: 14, textAlign: "center" }}><img src={LOGO} alt={CLINIC.name} style={{ height: 30, display: "inline-block" }} /><div style={{ fontFamily: "Inter, sans-serif", fontSize: 11, color: C.sage, marginTop: 6, fontStyle: "italic" }}>{CLINIC.tagline}</div></div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {member.email ? <button className="fr-btn" onClick={sendFromClinic} disabled={emailState === "sending" || emailState === "sent"} style={{ ...primaryBtn, opacity: emailState === "sending" ? 0.6 : 1 }}>{emailState === "sending" ? "Sending…" : emailState === "sent" ? "✓ Emailed" : "Email from clinic"}</button> : <button className="fr-btn" disabled style={{ ...primaryBtn, opacity: 0.4 }}>Email from clinic (no address)</button>}
-          <button className="fr-btn" onClick={() => { download(invoiceHTML(member, mLabel, inv), `${invNo}.html`, "text/html"); onSent("downloaded"); }} style={ghostBtn}>Download (print/PDF)</button>
-          {member.email && <a href={`mailto:${member.email}?subject=${enc(subject)}&body=${enc(text)}`} onClick={() => onSent("emailed")} className="fr-btn" style={{ ...ghostBtn, textDecoration: "none" }}>Open in mail app</a>}
+          <button className="fr-btn" onClick={() => { download(invoiceHTML(member, mLabel, inv), `${invNo}.html`, "text/html"); onSent("downloaded"); }} style={primaryBtn}>Download (print / PDF)</button>
+          {member.email ? <a href={`mailto:${member.email}?subject=${enc(subject)}&body=${enc(text)}`} onClick={() => onSent("emailed")} className="fr-btn" style={{ ...ghostBtn, textDecoration: "none" }}>Open in mail app</a> : <button className="fr-btn" disabled style={{ ...ghostBtn, opacity: 0.4 }}>Email (no address)</button>}
           <button className="fr-btn" onClick={() => { navigator.clipboard?.writeText(text); onSent("copied"); }} style={ghostBtn}>Copy text</button>
         </div>
-        {emailState === "error" && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.red, marginTop: 10 }}>Couldn't send: {emailMsg}</div>}
-        {emailState === "sent" && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.sage, marginTop: 10 }}>Sent to {member.email} from your clinic email.</div>}
-        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 12 }}>“Email from clinic” sends directly from your domain via Resend. “Download” opens a clean invoice to print or save as PDF.</div>
+        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 12 }}>“Download” opens a clean, print-ready invoice you can print or save as PDF. “Open in mail app” drafts it in your computer's email program.</div>
       </div>
     </div>
   );
