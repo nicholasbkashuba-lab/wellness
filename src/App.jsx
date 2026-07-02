@@ -303,6 +303,14 @@ export default function App() {
   };
   const clearMonth = (member) => { const month = { ...monthPayments }; delete month[member.id]; persist({ ...store, payments: { ...store.payments, [mk]: month } }); flash(`Cleared ${member.name}`); };
   const removeEntry = (member, idx) => { const entries = (store.payments[mk]?.[member.id]?.entries || []).filter((_, i) => i !== idx); persist({ ...store, payments: { ...store.payments, [mk]: { ...(store.payments[mk] || {}), [member.id]: { entries } } } }); };
+  const deleteMember = (member) => {
+    const members = store.members.filter((m) => m.id !== member.id);
+    const payments = {}; Object.entries(store.payments).forEach(([k, byId]) => { const c = { ...byId }; delete c[member.id]; payments[k] = c; });
+    const visits = { ...store.visits }; delete visits[member.id];
+    persist({ ...store, members, payments, visits });
+    setDetailId(null);
+    flash(`Removed ${member.name}`);
+  };
   const saveMember = (data) => { let members; if (data.id) members = store.members.map((m) => (m.id === data.id ? { ...m, ...data } : m)); else members = [...store.members, normMember({ ...data, id: uid() })]; persist({ ...store, members }); setMemberModal(null); flash(data.id ? "Member updated" : "Member added"); };
   const logActivity = (memberId, type, text) => { const members = store.members.map((m) => (m.id === memberId ? { ...m, activity: [...(m.activity || []), { id: uid(), at: new Date().toISOString(), type, text }] } : m)); persist({ ...store, members }); };
   const setMemberStatus = (member, status) => { const members = store.members.map((m) => (m.id === member.id ? { ...m, status, activity: [...(m.activity || []), { id: uid(), at: new Date().toISOString(), type: "status", text: `Status set to ${status}` }] } : m)); persist({ ...store, members }); flash(`${member.name} is now ${status}`); };
@@ -366,7 +374,7 @@ export default function App() {
         </header>
 
         <nav style={{ display: "flex", gap: 2, borderBottom: `1px solid ${C.line}`, marginBottom: 18, overflowX: "auto" }}>
-          {[["dashboard", "Dashboard"], ["checkin", "Check-in"], ["billing", "Billing"], ["members", "Members"], ["schedule", "Schedule"], ["history", "History"]].map(([k, label]) => (
+          {[["dashboard", "Dashboard"], ["checkin", "Check-in"], ["billing", "Billing"], ["reports", "Reports"], ["members", "Members"], ["schedule", "Schedule"], ["history", "History"]].map(([k, label]) => (
             <button key={k} className="fr-btn" onClick={() => { setView(k); setExpanded(null); }} style={{ ...tab, color: view === k ? C.teal : C.inkSoft, borderBottom: view === k ? `3px solid ${C.coral}` : "3px solid transparent", fontWeight: view === k ? 700 : 500 }}>{label}</button>
           ))}
         </nav>
@@ -408,10 +416,12 @@ export default function App() {
 
         {view === "schedule" && <Schedule store={store} calDate={calDate} onPrevMonth={() => setCalDate((d) => addMonths(d, -1))} onNextMonth={() => setCalDate((d) => addMonths(d, 1))} onDay={setDayOpen} onManageStaff={() => setStaffOpen(true)} onCover={(d, id, empId) => { updateShift(d, id, { status: "covered", coverBy: empId }); flash("Shift covered"); }} empById={empById} tIso={tIso} />}
 
+        {view === "reports" && <Reports store={store} mk={mk} monthLabelStr={monthLabel(monthDate)} onPrev={() => changeMonth(-1)} onNext={() => changeMonth(1)} lifetimePaid={lifetimePaid} monthsBehind={monthsBehind} visitsInMonth={visitsInMonth} openDetail={setDetailId} />}
+
         {view === "history" && <History store={store} />}
       </div>
 
-      {detailMember && <MemberDetail member={detailMember} store={store} mk={mk} monthState={monthState} lifetimePaid={lifetimePaid(detailMember)} monthsAsMember={monthsAsMember(detailMember)} monthsBehind={monthsBehind(detailMember)} visitsThisMonth={visitsInMonth(detailMember, mk)} visitedToday={!!visitedOn(detailMember.id, tIso)} onClose={() => setDetailId(null)} onEdit={() => setMemberModal(detailMember)} onStatus={(s) => setMemberStatus(detailMember, s)} onNote={(t) => logActivity(detailMember.id, "note", t)} onRemind={() => setReminderMember(detailMember)} onInvoice={() => setInvoiceMember(detailMember)} onCheckIn={() => checkInToday(detailMember.id)} onUndoCheckIn={() => toggleDay(detailMember.id, tIso)} onRemoveEntry={(i) => removeEntry(detailMember, i)} />}
+      {detailMember && <MemberDetail member={detailMember} store={store} mk={mk} monthState={monthState} lifetimePaid={lifetimePaid(detailMember)} monthsAsMember={monthsAsMember(detailMember)} monthsBehind={monthsBehind(detailMember)} visitsThisMonth={visitsInMonth(detailMember, mk)} visitedToday={!!visitedOn(detailMember.id, tIso)} onClose={() => setDetailId(null)} onEdit={() => setMemberModal(detailMember)} onStatus={(s) => setMemberStatus(detailMember, s)} onNote={(t) => logActivity(detailMember.id, "note", t)} onRemind={() => setReminderMember(detailMember)} onInvoice={() => setInvoiceMember(detailMember)} onCheckIn={() => checkInToday(detailMember.id)} onUndoCheckIn={() => toggleDay(detailMember.id, tIso)} onRemoveEntry={(i) => removeEntry(detailMember, i)} onDelete={() => { if (window.confirm(`Permanently remove ${detailMember.name} and all their payment history? This cannot be undone.`)) deleteMember(detailMember); }} />}
       {reminderMember && <ReminderModal member={reminderMember} mLabel={monthLabel(monthDate)} state={monthState(reminderMember, monthPayments[reminderMember.id]?.entries)} onClose={() => setReminderMember(null)} onSent={(ch) => { logActivity(reminderMember.id, "reminder", `Reminder sent (${ch})`); flash("Reminder logged"); }} />}
       {invoiceMember && <InvoiceModal member={invoiceMember} mk={mk} mLabel={monthLabel(monthDate)} state={monthState(invoiceMember, monthPayments[invoiceMember.id]?.entries)} onClose={() => setInvoiceMember(null)} onSent={(ch) => { logActivity(invoiceMember.id, "invoice", `Invoice ${ch}`); flash("Logged to activity"); }} />}
       {staffOpen && <StaffModal employees={store.employees} isAdmin={!!currentStaff?.isAdmin} adminCode={store.meta.adminCode} onSave={saveEmployee} onDelete={deleteEmployee} onExportICS={exportEmployeeICS} onSetAdminCode={setAdminCode} onClose={() => setStaffOpen(false)} />}
@@ -770,7 +780,18 @@ function InvoiceModal({ member, mk, mLabel, state, onClose, onSent }) {
   const paidInFull = state.state === "paid" || state.state === "comp";
   const inv = { amount: state.rate, paid: state.paid, balance: state.remaining, paidInFull, invNo };
   const text = invoiceText(member, mLabel, inv);
-  const subject = `${CLINIC.name} — Invoice ${invNo}`;
+  const subject = `${CLINIC.name} — ${paidInFull ? "Receipt" : "Invoice"} ${invNo}`;
+  const [emailState, setEmailState] = useState("idle"); // idle | sending | sent | error
+  const [emailMsg, setEmailMsg] = useState("");
+  const sendFromClinic = async () => {
+    setEmailState("sending"); setEmailMsg("");
+    try {
+      const r = await fetch("/api/send-invoice", { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ to: member.email, subject, html: invoiceHTML(member, mLabel, inv) }) });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) { setEmailState("sent"); onSent("emailed from clinic"); }
+      else { setEmailState("error"); setEmailMsg(data.error || `Error ${r.status}`); }
+    } catch (e) { setEmailState("error"); setEmailMsg(String((e && e.message) || e)); }
+  };
   return (
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={(e) => e.stopPropagation()}>
@@ -785,18 +806,21 @@ function InvoiceModal({ member, mk, mLabel, state, onClose, onSent }) {
           <div style={{ borderTop: `1px solid ${C.cream}`, marginTop: 12, paddingTop: 12, textAlign: "center" }}><img src={LOGO} alt="First Rehabilitation Inc." style={{ height: 34, display: "inline-block" }} /><div style={{ fontFamily: "Inter, sans-serif", fontSize: 11, color: C.inkSoft, marginTop: 4, fontStyle: "italic" }}>{CLINIC.tagline}</div></div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button className="fr-btn" onClick={() => { download(invoiceHTML(member, mLabel, inv), `${invNo}.html`, "text/html"); onSent("downloaded"); }} style={primaryBtn}>Download (print/PDF)</button>
-          {member.email ? <a href={`mailto:${member.email}?subject=${enc(subject)}&body=${enc(text)}`} onClick={() => onSent("emailed")} className="fr-btn" style={{ ...ghostBtn, textDecoration: "none" }}>Email</a> : <button className="fr-btn" disabled style={{ ...ghostBtn, opacity: 0.4 }}>Email (no address)</button>}
+          {member.email ? <button className="fr-btn" onClick={sendFromClinic} disabled={emailState === "sending" || emailState === "sent"} style={{ ...primaryBtn, opacity: emailState === "sending" ? 0.6 : 1 }}>{emailState === "sending" ? "Sending…" : emailState === "sent" ? "✓ Emailed" : "Email from clinic"}</button> : <button className="fr-btn" disabled style={{ ...primaryBtn, opacity: 0.4 }}>Email from clinic (no address)</button>}
+          <button className="fr-btn" onClick={() => { download(invoiceHTML(member, mLabel, inv), `${invNo}.html`, "text/html"); onSent("downloaded"); }} style={ghostBtn}>Download (print/PDF)</button>
+          {member.email && <a href={`mailto:${member.email}?subject=${enc(subject)}&body=${enc(text)}`} onClick={() => onSent("emailed")} className="fr-btn" style={{ ...ghostBtn, textDecoration: "none" }}>Open in mail app</a>}
           <button className="fr-btn" onClick={() => { navigator.clipboard?.writeText(text); onSent("copied"); }} style={ghostBtn}>Copy text</button>
         </div>
-        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 12 }}>Download opens a clean invoice you can print or save as PDF from your browser.</div>
+        {emailState === "error" && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.red, marginTop: 10 }}>Couldn't send: {emailMsg}</div>}
+        {emailState === "sent" && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.sage, marginTop: 10 }}>Sent to {member.email} from your clinic email.</div>}
+        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 12 }}>“Email from clinic” sends directly from your domain via Resend. “Download” opens a clean invoice to print or save as PDF.</div>
       </div>
     </div>
   );
 }
 
 // =================== MEMBER DETAIL ===================
-function MemberDetail({ member, store, mk, monthState, lifetimePaid, monthsAsMember, monthsBehind, visitsThisMonth, visitedToday, onClose, onEdit, onStatus, onNote, onRemind, onInvoice, onCheckIn, onUndoCheckIn, onRemoveEntry }) {
+function MemberDetail({ member, store, mk, monthState, lifetimePaid, monthsAsMember, monthsBehind, visitsThisMonth, visitedToday, onClose, onEdit, onStatus, onNote, onRemind, onInvoice, onCheckIn, onUndoCheckIn, onRemoveEntry, onDelete }) {
   const [noteText, setNoteText] = useState("");
   const months = Object.keys(store.payments).filter((k) => store.payments[k][member.id]).sort().reverse();
   const visits = (store.visits[member.id] || []).slice().sort((a, b) => (vAt(b) || "").localeCompare(vAt(a) || ""));
@@ -808,7 +832,7 @@ function MemberDetail({ member, store, mk, monthState, lifetimePaid, monthsAsMem
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}><div><h2 style={{ fontFamily: "'Playfair Display', serif", color: C.teal, margin: 0, fontSize: 24 }}>{member.name}</h2><div style={{ fontFamily: "Inter, sans-serif", color: C.inkSoft, fontSize: 14, marginTop: 4 }}>{money(member.rate)}/mo · {member.method}{member.phone ? ` · ${member.phone}` : ""}{member.email ? ` · ${member.email}` : ""}</div><span style={{ ...pill, background: st.bg, color: st.fg, marginTop: 8, display: "inline-block" }}>{member.status}</span></div><button className="fr-btn" onClick={onClose} style={{ ...ghostBtn, fontSize: 18, padding: "4px 12px" }}>✕</button></div>
         <div className="grid-3" style={{ margin: "18px 0" }}><MiniStat label="Lifetime paid" value={money(lifetimePaid)} /><MiniStat label="Member for" value={`${monthsAsMember} mo`} /><MiniStat label="Visits this month" value={String(visitsThisMonth)} /></div>
         {monthsBehind >= 1 && <div style={{ background: C.redBg, color: C.red, borderRadius: 12, padding: "10px 14px", fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 600, marginBottom: 16 }}>{monthsBehind} month{monthsBehind === 1 ? "" : "s"} behind on payment</div>}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}><button className="fr-btn" onClick={onEdit} style={ghostBtn}>Edit</button><button className="fr-btn" onClick={onInvoice} style={ghostBtn}>Invoice / receipt</button><button className="fr-btn" onClick={onRemind} style={ghostBtn}>Send reminder</button>{visitedToday ? <button className="fr-btn" onClick={onUndoCheckIn} style={ghostBtn}>Checked in · undo</button> : <button className="fr-btn" onClick={onCheckIn} style={{ ...primaryBtn, background: C.sage }}>Check in</button>}</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}><button className="fr-btn" onClick={onEdit} style={ghostBtn}>Edit</button><button className="fr-btn" onClick={onInvoice} style={ghostBtn}>Invoice / receipt</button><button className="fr-btn" onClick={onRemind} style={ghostBtn}>Send reminder</button>{visitedToday ? <button className="fr-btn" onClick={onUndoCheckIn} style={ghostBtn}>Checked in · undo</button> : <button className="fr-btn" onClick={onCheckIn} style={{ ...primaryBtn, background: C.sage }}>Check in</button>}{onDelete && <button className="fr-btn" onClick={onDelete} style={{ ...ghostBtn, color: C.red, borderColor: C.red, marginLeft: "auto" }}>Delete member</button>}</div>
         <div style={{ marginBottom: 22 }}><div style={{ ...sectionLabel, marginBottom: 8 }}>Membership status</div><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{STATUSES.map((s) => <button key={s} className="fr-btn" onClick={() => onStatus(s)} style={{ ...chip, textTransform: "capitalize", background: member.status === s ? C.teal : "#fff", color: member.status === s ? "#fff" : C.ink, borderColor: member.status === s ? C.teal : C.line }}>{s}</button>)}</div>{member.status === "paused" && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 6 }}>Paused members are hidden from outstanding lists and revenue — good for seasonal members.</div>}</div>
         <div style={{ marginBottom: 22 }}><div style={{ ...sectionLabel, marginBottom: 8 }}>Payment history</div>{months.length === 0 ? <div style={emptyLine}>No payments recorded yet.</div> : <div style={cardList}>{months.map((k) => { const entries = store.payments[k][member.id].entries || []; const ms = monthState(member, entries); const tone = ms.state === "paid" ? C.sage : ms.state === "comp" ? C.gold : ms.state === "partial" ? C.amber : C.red; return (<div key={k} style={{ padding: "10px 14px", borderBottom: `1px solid ${C.cream}` }}><div style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif" }}><span style={{ fontWeight: 600, color: C.ink }}>{monthLabel(keyToDate(k))}</span><span style={{ fontWeight: 600, color: tone, textTransform: "capitalize" }}>{ms.state === "partial" ? `${money(ms.paid)} of ${money(ms.rate)}` : ms.state}</span></div>{entries.map((e, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginTop: 4 }}><span>{e.method} · {fmtDateShort(e.date)}{e.note ? ` · ${e.note}` : ""}</span><span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>{money(e.amount)}{k === mk && <button className="fr-btn" onClick={() => onRemoveEntry(i)} style={{ ...linkBtn, color: C.red }}>remove</button>}</span></div>)}</div>); })}</div>}</div>
         <div style={{ marginBottom: 22 }}><div style={{ ...sectionLabel, marginBottom: 8 }}>Recent visits</div>{visits.length === 0 ? <div style={emptyLine}>No check-ins recorded.</div> : <div style={{ fontFamily: "Inter, sans-serif", fontSize: 14, display: "flex", flexDirection: "column", gap: 4 }}>{visits.slice(0, 8).map((v, i) => <span key={i} style={{ color: C.inkSoft }}>{fmtDateShort(vAt(v))} · {fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</span>)}</div>}</div>
@@ -819,6 +843,92 @@ function MemberDetail({ member, store, mk, monthState, lifetimePaid, monthsAsMem
 }
 
 // =================== HISTORY ===================
+function Reports({ store, mk, monthLabelStr, onPrev, onNext, lifetimePaid, monthsBehind, visitsInMonth, openDetail }) {
+  const monthPayments = store.payments[mk] || {};
+  const roster = store.members.filter((m) => m.status === "active" && (m.startDate ? m.startDate.slice(0, 7) <= mk : true));
+  const ids = new Set(roster.map((m) => m.id));
+  Object.keys(monthPayments).forEach((id) => { if (!ids.has(id)) { const m = store.members.find((x) => x.id === id); if (m) { roster.push(m); ids.add(id); } } });
+
+  const rows = roster.map((m) => ({ m, ...monthState(m, monthPayments[m.id]?.entries) }));
+  const paidRows = rows.filter((r) => r.state === "paid" || r.state === "comp").sort((a, b) => a.m.name.localeCompare(b.m.name));
+  const unpaidRows = rows.filter((r) => r.state === "outstanding" || r.state === "partial").sort((a, b) => a.m.name.localeCompare(b.m.name));
+
+  const collected = rows.reduce((s, r) => s + (r.state === "comp" ? 0 : r.paid), 0);
+  const outstanding = unpaidRows.reduce((s, r) => s + r.remaining, 0);
+  const paidCount = rows.filter((r) => r.state === "paid").length;
+  const compCount = rows.filter((r) => r.state === "comp").length;
+  const expectedPaying = rows.filter((r) => r.state !== "comp").length;
+  const rate = expectedPaying > 0 ? Math.round((paidCount / expectedPaying) * 100) : 0;
+
+  const methods = { Cash: { amt: 0, n: 0 }, Check: { amt: 0, n: 0 }, Card: { amt: 0, n: 0 }, Recurring: { amt: 0, n: 0 }, Comp: { amt: 0, n: 0 } };
+  Object.values(monthPayments).forEach((p) => (p.entries || []).forEach((e) => { if (methods[e.method]) { methods[e.method].amt += Number(e.amount) || 0; methods[e.method].n += 1; } }));
+  const methodMax = Math.max(1, ...Object.values(methods).map((x) => x.amt));
+  const methodColor = { Cash: C.sage, Check: C.teal, Card: C.coral, Recurring: C.gold, Comp: C.inkSoft };
+
+  const exportCSV = () => {
+    const lines = [["Member", "Status", "Paid", "Balance", "Method(s)", "Monthly rate"]];
+    rows.forEach((r) => { const es = monthPayments[r.m.id]?.entries || []; lines.push([r.m.name, r.state, r.paid, r.remaining, es.map((e) => e.method).join(" / "), r.rate]); });
+    downloadCSV(lines, `wellness-report-${mk}.csv`);
+  };
+
+  return (
+    <>
+      <MonthBar label={monthLabelStr} onPrev={onPrev} onNext={onNext} />
+
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: 18, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}><span style={sectionLabel}>Collection rate</span><span style={{ fontFamily: "Inter, sans-serif", fontWeight: 700, color: C.teal, fontSize: 20 }}>{rate}%</span></div>
+        <Bar pct={rate} />
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft }}><span>{paidCount} of {expectedPaying} paying members paid</span><span>{money(collected)} collected · {money(outstanding)} outstanding</span></div>
+      </div>
+
+      <div className="grid-3" style={{ marginBottom: 16 }}>
+        <Stat label="Collected" value={money(collected)} accent={C.sage} sub={`${paidCount} paid`} />
+        <Stat label="Outstanding" value={money(outstanding)} accent={C.red} sub={`${unpaidRows.length} owe`} />
+        <Stat label="No charge" value={String(compCount)} accent={C.gold} sub="comped members" />
+      </div>
+
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: "16px 18px", marginBottom: 22 }}>
+        <div style={{ ...sectionLabel, marginBottom: 14 }}>Payments by method</div>
+        {["Cash", "Check", "Card", "Recurring", "Comp"].map((mth) => (
+          <div key={mth} style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif", fontSize: 13, marginBottom: 4 }}><span style={{ fontWeight: 600, color: C.ink }}>{mth}</span><span style={{ color: C.inkSoft }}>{money(methods[mth].amt)} · {methods[mth].n} payment{methods[mth].n === 1 ? "" : "s"}</span></div>
+            <div style={{ height: 8, background: C.cream, borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${(methods[mth].amt / methodMax) * 100}%`, height: "100%", background: methodColor[mth], transition: "width .3s" }} /></div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...sectionLabel, color: C.sage, marginBottom: 8 }}>✓ Paid · {paidRows.length}</div>
+      <div style={{ ...cardList, marginBottom: 22 }}>
+        {paidRows.length === 0 ? <div style={{ ...emptyLine, padding: "12px 14px" }}>No payments recorded for this month yet.</div> : paidRows.map((r) => <ReportRow key={r.m.id} row={r} paid entries={monthPayments[r.m.id]?.entries || []} onOpen={() => openDetail(r.m.id)} />)}
+      </div>
+
+      <div style={{ ...sectionLabel, color: C.red, marginBottom: 8 }}>● Not paid · {unpaidRows.length}</div>
+      <div style={{ ...cardList, marginBottom: 22 }}>
+        {unpaidRows.length === 0 ? <div style={{ ...emptyLine, padding: "12px 14px" }}>Everyone's paid this month — nice!</div> : unpaidRows.map((r) => <ReportRow key={r.m.id} row={r} entries={monthPayments[r.m.id]?.entries || []} onOpen={() => openDetail(r.m.id)} />)}
+      </div>
+
+      <button className="fr-btn" onClick={exportCSV} style={ghostBtn}>Export this report (CSV)</button>
+    </>
+  );
+}
+
+function ReportRow({ row, paid, entries, onOpen }) {
+  const { m, state, remaining } = row;
+  const isComp = state === "comp";
+  const color = isComp ? C.gold : paid ? C.sage : C.red;
+  const icon = isComp ? "★" : paid ? "✓" : "!";
+  const sub = isComp ? "No charge (comped)" : paid ? `Paid ${money(row.paid)}${entries.length ? " · " + entries.map((e) => e.method).join(", ") : ""}` : state === "partial" ? `Paid ${money(row.paid)} · ${money(remaining)} left` : `${money(remaining)} due · usually ${m.method}`;
+  return (
+    <div className="fr-row clickable" style={{ ...rowBase, background: paid ? C.greenBg : C.redBg }} onClick={onOpen}>
+      <span style={{ width: 26, height: 26, borderRadius: 999, background: color, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 14, flex: "0 0 auto" }}>{icon}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div>
+        <div style={{ fontSize: 13, color: paid ? C.sage : C.red, fontFamily: "Inter, sans-serif" }}>{sub}</div>
+      </div>
+    </div>
+  );
+}
+
 function History({ store }) {
   const [open, setOpen] = useState(null);
   const months = Object.keys(store.payments).filter((k) => Object.keys(store.payments[k]).length).sort().reverse();
