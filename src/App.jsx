@@ -439,7 +439,7 @@ export default function App() {
 
         {view === "dashboard" && <Dashboard monthLabelStr={monthLabel(monthDate)} onPrev={() => changeMonth(-1)} onNext={() => changeMonth(1)} store={store} mk={mk} collected={collected} outstandingAmt={outstandingAmt} settledCount={settled.length} expectedCount={monthMembers.length} methodTotals={methodTotals} monthsBehind={monthsBehind} visitsInMonth={visitsInMonth} openDetail={setDetailId} />}
 
-        {view === "checkin" && <CheckInTab store={store} day={attDay} isToday={attDay === tIso} onPrev={() => setAttDay((d) => addDaysISO(d, -1))} onNext={() => { if (attDay < tIso) setAttDay((d) => addDaysISO(d, 1)); }} onToday={() => setAttDay(tIso)} visitedOn={visitedOn} onToggle={(id) => toggleDay(id, attDay)} onExport={exportAttendanceCSV} openDetail={setDetailId} />}
+        {view === "checkin" && <CheckInTab store={store} day={attDay} isToday={attDay === tIso} onPrev={() => setAttDay((d) => addDaysISO(d, -1))} onNext={() => { if (attDay < tIso) setAttDay((d) => addDaysISO(d, 1)); }} onToday={() => setAttDay(tIso)} onPickDay={setAttDay} visitedOn={visitedOn} onToggle={(id) => toggleDay(id, attDay)} onExport={exportAttendanceCSV} openDetail={setDetailId} />}
 
         {view === "billing" && (
           <>
@@ -639,8 +639,50 @@ function LockScreen({ employees, adminCode, onUnlock }) {
 }
 
 // =================== CHECK-IN / ATTENDANCE ===================
-function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, visitedOn, onToggle, onExport, openDetail }) {
+function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, visitedOn, onToggle, onExport, openDetail }) {
   const [q, setQ] = useState("");
+  const [mode, setMode] = useState("day"); // "day" | "calendar"
+  const [calMonth, setCalMonth] = useState(() => keyToDate(day.slice(0, 7)));
+  const modeToggle = (
+    <div style={{ display: "flex", gap: 6 }}>
+      {[["day", "Day"], ["calendar", "Calendar"]].map(([k, label]) => (
+        <button key={k} className="fr-btn" onClick={() => { if (k === "calendar") setCalMonth(keyToDate(day.slice(0, 7))); setMode(k); }}
+          style={{ ...chip, background: mode === k ? C.teal : "#fff", color: mode === k ? "#fff" : C.ink, borderColor: mode === k ? C.teal : C.line }}>{label}</button>
+      ))}
+    </div>
+  );
+
+  if (mode === "calendar") {
+    const t = todayISO();
+    const counts = {}; const names = {};
+    Object.entries(store.visits).forEach(([id, list]) => (list || []).forEach((v) => {
+      const d = (vAt(v) || "").slice(0, 10); if (!d) return;
+      counts[d] = (counts[d] || 0) + 1;
+      const m = store.members.find((x) => x.id === id); if (m && (names[d] = names[d] || []).length < 3) names[d].push(firstName(m.name));
+    }));
+    const mkCal = monthKey(calMonth);
+    const monthTotal = Object.entries(counts).reduce((s, [d, n]) => (d.slice(0, 7) === mkCal ? s + n : s), 0);
+    return (
+      <>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>{modeToggle}</div>
+        <MonthBar label={monthLabel(calMonth)} onPrev={() => setCalMonth((d) => addMonths(d, -1))} onNext={() => setCalMonth((d) => addMonths(d, 1))} />
+        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginBottom: 12 }}>{monthTotal} check-in{monthTotal === 1 ? "" : "s"} this month · tap a day to see everyone who was there</div>
+        <div className="cal-grid" style={{ marginBottom: 6 }}>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d} style={{ textAlign: "center", fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700, color: C.inkSoft, textTransform: "uppercase", letterSpacing: 1 }}>{d}</div>)}</div>
+        <div className="cal-grid">{monthMatrix(calMonth).map((d, i) => {
+          if (!d) return <div key={i} style={{ minHeight: 78 }} />;
+          const k = dateISO(d); const n = counts[k] || 0; const future = k > t; const today = k === t;
+          return (
+            <button key={i} className="fr-btn" disabled={future} onClick={() => { onPickDay(k); setMode("day"); }}
+              style={{ minHeight: 78, background: "#fff", border: `1px solid ${today ? C.teal : C.line}`, borderWidth: today ? 2 : 1, borderRadius: 12, padding: "8px 6px", cursor: future ? "default" : "pointer", opacity: future ? 0.4 : 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 5, fontFamily: "Inter, sans-serif" }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: today ? C.teal : C.inkSoft }}>{d.getDate()}</span>
+              {n > 0 && <span style={{ background: C.greenBg, color: C.sage, borderRadius: 999, fontSize: 12, fontWeight: 700, padding: "3px 10px" }}>{n} here</span>}
+              {n > 0 && names[k] && <span style={{ fontSize: 10, color: C.inkSoft, lineHeight: 1.3, overflow: "hidden", maxHeight: 26 }}>{names[k].join(", ")}{n > 3 ? "…" : ""}</span>}
+            </button>
+          );
+        })}</div>
+      </>
+    );
+  }
   const active = store.members.filter((m) => m.status === "active");
   const present = active.filter((m) => visitedOn(m.id, day)).map((m) => ({ m, v: visitedOn(m.id, day) })).sort((a, b) => (vAt(a.v) || "").localeCompare(vAt(b.v) || ""));
   // Amount this member still owes for the month being viewed (0 for paid/comped).
@@ -655,7 +697,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, visitedOn, o
           <div><div style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, color: C.teal, fontWeight: 600 }}>{isToday ? "Today" : fmtFull(day)}</div>{isToday && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{fmtFull(day)}</div>}</div>
           <button className="fr-btn" onClick={onNext} disabled={isToday} style={{ ...navArrow, opacity: isToday ? 0.4 : 1 }}>›</button>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>{!isToday && <button className="fr-btn" onClick={onToday} style={ghostBtn}>Jump to today</button>}<button className="fr-btn" onClick={onExport} style={ghostBtn}>Export</button></div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{modeToggle}{!isToday && <button className="fr-btn" onClick={onToday} style={ghostBtn}>Jump to today</button>}<button className="fr-btn" onClick={onExport} style={ghostBtn}>Export</button></div>
       </div>
       {!isToday && <div style={{ background: C.amberBg, color: C.amber, borderRadius: 10, padding: "8px 14px", fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600, marginBottom: 14 }}>Editing a past day — tap to add or remove who was here.</div>}
       <div className="grid-2" style={{ marginBottom: 18 }}>
