@@ -53,11 +53,14 @@ const C = {
   greenBg: "#E7F0EC", amber: "#B9842E", amberBg: "#FBF1DA",
 };
 const CLINIC = { name: "First Rehabilitation Inc.", addr: "733 US Highway 1, Suite 2A, North Palm Beach, FL 33408", tagline: "Heal. Strengthen. Thrive." };
+// Kiosk mode: open the app at /?kiosk (or #kiosk) for the front-desk iPad
+// self check-in screen. Check-in only — no PIN, no billing data shown.
+const IS_KIOSK = typeof window !== "undefined" && (window.location.search.includes("kiosk") || window.location.hash.includes("kiosk"));
 const METHODS = ["Cash", "Check", "Card", "Recurring", "Comp"];
 const STATUSES = ["active", "paused", "cancelled"];
 const STORE_KEY = "wellness:store:v1";
 const DEFAULT_RATE = 80;
-const IDLE_MS = 10 * 60 * 1000;
+const IDLE_MS = 60 * 60 * 1000; // auto-lock after 1 hour of inactivity
 const EMP_COLORS = ["#1A5F7A", "#F4A261", "#52796F", "#5C6B9E", "#B9842E", "#7A8450", "#9E5C7A", "#3E7CB1"];
 const SEED_EMPLOYEES = [["David Kashuba", "Owner"], ["Nick Kashuba", "COO"], ["Matt Werner", "Wellness"], ["Mark Frangione", "Wellness"], ["Bradd Henderson", "Wellness"], ["Vicki Stanford", "Wellness"], ["Logan Van Sant", "PT"], ["Kayla Dorsey", "PT, DPT"], ["Laura Drumm", "Hand Therapy"], ["Joni Janik", "OT"]];
 const WELLNESS_STAFF = ["Matt Werner", "Mark Frangione", "Bradd Henderson", "Vicki Stanford"];
@@ -363,6 +366,13 @@ export default function App() {
     persist({ ...store, visits: { ...store.visits, [id]: next } });
   };
   const checkInToday = (id) => { if (visitedOn(id, tIso)) return; toggleDay(id, tIso); flash("Checked in"); };
+  // Kiosk self check-in — no staff session; visits are attributed to "Kiosk".
+  const kioskCheckIn = (member) => {
+    const list = store.visits[member.id] || [];
+    if (list.some((v) => (vAt(v) || "").slice(0, 10) === tIso)) return "already";
+    persist({ ...store, visits: { ...store.visits, [member.id]: [...list, { at: new Date().toISOString(), by: "Kiosk" }] } });
+    return "ok";
+  };
 
   const saveEmployee = (data) => { let employees; if (data.id) employees = store.employees.map((e) => (e.id === data.id ? { ...e, ...data } : e)); else employees = [...store.employees, normEmployee({ ...data, id: uid(), color: data.color || EMP_COLORS[store.employees.length % EMP_COLORS.length] }, store.employees.length)]; persist({ ...store, employees }); flash(data.id ? "Staff updated" : "Staff added"); };
   const deleteEmployee = (id) => { persist({ ...store, employees: store.employees.filter((e) => e.id !== id) }); flash("Staff removed"); };
@@ -383,6 +393,7 @@ export default function App() {
   const detailMember = detailId ? store.members.find((m) => m.id === detailId) : null;
 
   if (loading) return <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ color: C.inkSoft, fontFamily: "Inter, system-ui, sans-serif" }}>Loading your clinic…</div></div>;
+  if (IS_KIOSK) return <KioskScreen store={store} onCheckIn={kioskCheckIn} />;
   if (!store.meta?.adminCode) return <SetupScreen onSetup={(code) => { const next = { ...store, meta: { ...store.meta, adminCode: code } }; setStore(next); storage.set(STORE_KEY, JSON.stringify(next)).catch(() => {}); setUnlocked(true); setCurrentStaff({ name: "Admin", role: "Owner", isAdmin: true }); }} />;
   if (!unlocked) return <LockScreen employees={store.employees} adminCode={store.meta.adminCode} onUnlock={(staff) => { setUnlocked(true); setCurrentStaff(staff); }} />;
 
@@ -473,6 +484,84 @@ export default function App() {
 }
 
 // =================== SETUP & LOCK ===================
+// =================== KIOSK (iPad self check-in) ===================
+function KioskScreen({ store, onCheckIn }) {
+  const [q, setQ] = useState("");
+  const [done, setDone] = useState(null); // { name, already }
+  const inputRef = React.useRef(null);
+  const resetTimer = React.useRef(null);
+
+  const reset = () => { setQ(""); setDone(null); clearTimeout(resetTimer.current); setTimeout(() => inputRef.current?.focus(), 50); };
+
+  // Auto-clear whatever was typed after 45s of inactivity so the next person gets a fresh screen.
+  useEffect(() => {
+    if (!q && !done) return;
+    const t = setTimeout(reset, 45000);
+    return () => clearTimeout(t);
+  }, [q, done]);
+
+  const matches = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (s.length < 2) return [];
+    return store.members
+      .filter((m) => m.status === "active" && m.name.toLowerCase().includes(s))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 8);
+  }, [q, store.members]);
+
+  const pick = (m) => {
+    const result = onCheckIn(m);
+    setDone({ name: firstName(m.name), already: result === "already" });
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(reset, 5000);
+  };
+
+  const kioskWrap = { minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", padding: "6vh 24px 24px", fontFamily: "Inter, system-ui, sans-serif" };
+
+  if (done) {
+    return (
+      <div style={kioskWrap} onClick={reset}>
+        <img src={LOGO} alt={CLINIC.name} style={{ height: 64, marginBottom: "5vh" }} />
+        <div style={{ width: 140, height: 140, borderRadius: 999, background: done.already ? C.gold : C.sage, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 84, marginBottom: 28 }}>✓</div>
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 44, color: C.teal, fontWeight: 700, textAlign: "center" }}>{done.already ? `You're already checked in, ${done.name}!` : `You're checked in, ${done.name}!`}</div>
+        <div style={{ fontSize: 22, color: C.inkSoft, marginTop: 16, textAlign: "center" }}>Have a great workout. {CLINIC.tagline}</div>
+        <div style={{ fontSize: 15, color: C.inkSoft, marginTop: "6vh" }}>Tap anywhere for the next person</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={kioskWrap}>
+      <img src={LOGO} alt={CLINIC.name} style={{ height: 64, marginBottom: 18 }} />
+      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 40, color: C.teal, fontWeight: 700, textAlign: "center" }}>Welcome! Check in here.</div>
+      <div style={{ fontSize: 20, color: C.inkSoft, margin: "10px 0 26px", textAlign: "center" }}>Type your name, then tap it below.</div>
+      <input
+        ref={inputRef}
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Start typing your name…"
+        autoFocus
+        autoComplete="off"
+        style={{ width: "100%", maxWidth: 560, fontSize: 28, padding: "18px 22px", borderRadius: 16, border: `2px solid ${C.line}`, outline: "none", background: "#fff", color: C.ink, textAlign: "center" }}
+      />
+      <div style={{ width: "100%", maxWidth: 560, marginTop: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+        {q.trim().length >= 2 && matches.length === 0 && (
+          <div style={{ textAlign: "center", fontSize: 19, color: C.inkSoft, padding: "18px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14 }}>
+            We can't find that name — please check the spelling, or ask the front desk and we'll get you set up.
+          </div>
+        )}
+        {matches.map((m) => (
+          <button key={m.id} className="fr-btn" onClick={() => pick(m)}
+            style={{ fontSize: 24, fontWeight: 600, color: C.ink, background: "#fff", border: `2px solid ${C.line}`, borderRadius: 16, padding: "20px 22px", cursor: "pointer", textAlign: "center" }}>
+            {m.name}
+          </button>
+        ))}
+      </div>
+      <div style={{ marginTop: "auto", paddingTop: 24, fontSize: 13, color: C.inkSoft, fontStyle: "italic" }}>{CLINIC.name} · {CLINIC.tagline}</div>
+    </div>
+  );
+}
+
 function SetupScreen({ onSetup }) {
   const [a, setA] = useState(""); const [b, setB] = useState(""); const [err, setErr] = useState("");
   const submit = () => { if (a.length < 4) return setErr("Use at least 4 digits."); if (a !== b) return setErr("Codes don't match."); onSetup(a); };
