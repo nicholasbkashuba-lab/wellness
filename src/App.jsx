@@ -301,6 +301,13 @@ export default function App() {
   };
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
 
+  // One-time migration: standardize the master passcode to 6780 (owner request).
+  useEffect(() => {
+    if (loading) return;
+    const code = store.meta?.adminCode;
+    if (code && code !== "6780") persist({ ...store, meta: { ...store.meta, adminCode: "6780" } });
+  }, [loading, store.meta?.adminCode]);
+
   const mk = monthKey(monthDate);
   const tIso = todayISO();
   const monthPayments = store.payments[mk] || {};

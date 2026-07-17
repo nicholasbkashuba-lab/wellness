@@ -2,13 +2,15 @@ import { sql } from "@vercel/postgres";
 
 // Shared key/value store for the whole app state (one JSON document per key).
 //
-// Storage strategy (non-destructive by design):
-//   * Supabase is the primary store once configured.
-//   * The original Vercel Postgres (Neon) database is KEPT as a durable
-//     backup. Existing data there is auto-migrated into Supabase on first
-//     read, and every write is mirrored back to Neon. Nothing is deleted.
-//   * If Supabase is not configured (env vars missing), the app keeps working
-//     exactly as before, straight off Neon.
+// Redundant, non-destructive storage:
+//   * TWO databases hold the data — Supabase (wellness_store) and the original
+//     Vercel Postgres / Neon (kv_store).
+//   * Reads return whichever copy is newest, and best-effort "heal" the stale
+//     side so both converge.
+//   * Writes go to both; the request succeeds if EITHER accepts it, so a
+//     paused/unreachable database never blocks the clinic.
+//   * Nothing is ever deleted. If Supabase env vars are absent, Neon alone is
+//     used, exactly like before.
 
 const SB_URL = process.env.SUPABASE_URL;
 const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -16,26 +18,23 @@ const sbOn = !!(SB_URL && SB_KEY);
 const SB_TABLE = "wellness_store";
 
 const sbHeaders = () => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" });
+const ts = (x) => { const t = new Date(x || 0).getTime(); return Number.isFinite(t) ? t : 0; };
 
 async function sbGet(key) {
-  const r = await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}&select=value`, { headers: sbHeaders() });
+  const r = await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}&select=value,updated_at`, { headers: sbHeaders() });
   if (!r.ok) throw new Error("supabase get " + r.status);
   const rows = await r.json();
-  return rows[0] ? rows[0].value : null;
+  return rows[0] ? { value: rows[0].value, at: ts(rows[0].updated_at) } : null;
 }
-async function sbSet(key, value) {
+async function sbSet(key, value, at) {
   const r = await fetch(`${SB_URL}/rest/v1/${SB_TABLE}`, {
     method: "POST",
     headers: { ...sbHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
+    body: JSON.stringify({ key, value, updated_at: new Date(at || Date.now()).toISOString() }),
   });
   if (!r.ok) throw new Error("supabase set " + r.status + " " + (await r.text()));
 }
-async function sbDelete(key) {
-  await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}`, { method: "DELETE", headers: sbHeaders() });
-}
 
-// ---- Neon (original store) — durable backup / migration source ----
 let neonReady = false;
 async function neonEnsure() {
   if (neonReady) return;
@@ -43,11 +42,18 @@ async function neonEnsure() {
   neonReady = true;
 }
 async function neonGet(key) {
-  try { await neonEnsure(); const { rows } = await sql`SELECT value FROM kv_store WHERE key = ${key}`; return rows[0] ? rows[0].value : null; } catch { return null; }
+  await neonEnsure();
+  const { rows } = await sql`SELECT value, updated_at FROM kv_store WHERE key = ${key}`;
+  return rows[0] ? { value: rows[0].value, at: ts(rows[0].updated_at) } : null;
 }
-async function neonSet(key, value) {
-  try { await neonEnsure(); await sql`INSERT INTO kv_store (key, value, updated_at) VALUES (${key}, ${value}, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`; } catch {}
+async function neonSet(key, value, at) {
+  await neonEnsure();
+  const when = new Date(at || Date.now()).toISOString();
+  await sql`INSERT INTO kv_store (key, value, updated_at) VALUES (${key}, ${value}, ${when})
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`;
 }
+
+const attempt = (p) => p.then((v) => ({ ok: true, v })).catch((e) => ({ ok: false, e }));
 
 export default async function handler(req, res) {
   const required = process.env.APP_ACCESS_KEY;
@@ -60,41 +66,43 @@ export default async function handler(req, res) {
       const key = req.query.key;
       if (!key) return res.status(400).json({ error: "missing key" });
 
-      if (sbOn) {
-        let val = null;
-        try { val = await sbGet(key); } catch (e) { val = undefined; } // undefined = supabase unreachable
-        if (val != null) return res.status(200).json({ key, value: val });
-        // Supabase empty or unreachable → consult Neon backup.
-        const backup = await neonGet(key);
-        if (backup != null) {
-          if (val === null) { try { await sbSet(key, backup); } catch {} } // seed Supabase once (migration)
-          return res.status(200).json({ key, value: backup });
-        }
-        return res.status(200).json({ key, value: null });
+      if (!sbOn) {
+        const n = await attempt(neonGet(key));
+        return res.status(200).json({ key, value: n.ok && n.v ? n.v.value : null });
       }
 
-      const val = await neonGet(key);
-      return res.status(200).json({ key, value: val });
+      const [s, n] = await Promise.all([attempt(sbGet(key)), attempt(neonGet(key))]);
+      const sv = s.ok ? s.v : null;
+      const nv = n.ok ? n.v : null;
+      let winner = null;
+      if (sv && nv) winner = sv.at >= nv.at ? sv : nv;
+      else winner = sv || nv;
+      if (!winner) return res.status(200).json({ key, value: null });
+
+      // Heal whichever side is missing or stale (best-effort, don't block).
+      if (s.ok && (!sv || (nv && nv.at > sv.at && winner === nv))) sbSet(key, winner.value, winner.at).catch(() => {});
+      if (n.ok && (!nv || (sv && sv.at > nv.at && winner === sv))) neonSet(key, winner.value, winner.at).catch(() => {});
+
+      return res.status(200).json({ key, value: winner.value });
     }
 
     if (req.method === "POST") {
       const { key, value } = req.body || {};
       if (!key || typeof value !== "string") return res.status(400).json({ error: "bad request" });
-      if (sbOn) {
-        try { await sbSet(key, value); }
-        catch (e) { return res.status(500).json({ error: "save failed: " + ((e && e.message) || e) }); }
-        neonSet(key, value); // best-effort mirror to backup, don't block the response
-      } else {
-        await neonSet(key, value);
-      }
-      return res.status(200).json({ key, value });
+      const now = Date.now();
+      const writes = sbOn
+        ? await Promise.all([attempt(sbSet(key, value, now)), attempt(neonSet(key, value, now))])
+        : [await attempt(neonSet(key, value, now))];
+      if (writes.some((w) => w.ok)) return res.status(200).json({ key, value });
+      const err = writes.map((w) => String((w.e && w.e.message) || w.e)).join(" | ");
+      return res.status(500).json({ error: "save failed: " + err });
     }
 
     if (req.method === "DELETE") {
       const key = req.query.key;
       if (!key) return res.status(400).json({ error: "missing key" });
-      if (sbOn) { try { await sbDelete(key); } catch {} }
-      await neonSet(key, ""); // keep a tombstone in backup rather than hard-deleting
+      if (sbOn) { try { await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}`, { method: "DELETE", headers: sbHeaders() }); } catch {} }
+      try { await neonSet(key, "", Date.now()); } catch {} // tombstone, never hard-delete the backup
       return res.status(200).json({ key, deleted: true });
     }
 
