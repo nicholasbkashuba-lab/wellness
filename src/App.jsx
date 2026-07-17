@@ -427,7 +427,7 @@ export default function App() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: open.open ? C.greenBg : C.redBg, color: open.open ? C.sage : C.red, padding: "8px 14px", borderRadius: 999, fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: open.open ? C.sage : C.red }} />{open.label}</div>
-            <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{currentStaff?.name || "Signed in"} · <button className="fr-btn" onClick={lock} style={linkBtn}>Lock</button></div>
+            <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{currentStaff?.name || "Signed in"} · <button className="fr-btn" onClick={() => { window.location.href = window.location.pathname + "?kiosk"; }} style={linkBtn}>Kiosk mode</button> · <button className="fr-btn" onClick={lock} style={linkBtn}>Lock</button></div>
           </div>
         </header>
 
@@ -564,7 +564,7 @@ function KioskScreen({ store, onCheckIn }) {
           </button>
         ))}
       </div>
-      <div style={{ marginTop: "auto", paddingTop: 24, fontSize: 13, color: C.inkSoft, fontStyle: "italic" }}>{CLINIC.name} · {CLINIC.tagline}</div>
+      <div style={{ marginTop: "auto", paddingTop: 24, fontSize: 13, color: C.inkSoft, fontStyle: "italic" }}>{CLINIC.name} · {CLINIC.tagline} · <button className="fr-btn" onClick={() => { window.location.href = window.location.pathname; }} style={{ background: "none", border: "none", padding: 0, font: "inherit", color: C.inkSoft, textDecoration: "underline", cursor: "pointer" }}>Staff</button></div>
     </div>
   );
 }
