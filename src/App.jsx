@@ -524,10 +524,18 @@ function KioskScreen({ store, onCheckIn }) {
   };
 
   const kioskWrap = { minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", padding: "6vh 24px 24px", fontFamily: "Inter, system-ui, sans-serif" };
+  // Always-visible exit — safe to show, since leaving kiosk lands on the PIN lock screen.
+  const exitBtn = (
+    <button className="fr-btn" onClick={(e) => { e.stopPropagation(); window.location.href = window.location.pathname; }}
+      style={{ position: "fixed", top: 14, right: 16, background: "rgba(255,255,255,.85)", border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 14px", fontSize: 13, color: C.inkSoft, cursor: "pointer", fontFamily: "Inter, system-ui, sans-serif" }}>
+      Exit kiosk
+    </button>
+  );
 
   if (done) {
     return (
       <div style={kioskWrap} onClick={reset}>
+        {exitBtn}
         <img src={LOGO} alt={CLINIC.name} style={{ height: 64, marginBottom: "5vh" }} />
         <div style={{ width: 140, height: 140, borderRadius: 999, background: done.already ? C.gold : C.sage, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 84, marginBottom: 28 }}>✓</div>
         <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 44, color: C.teal, fontWeight: 700, textAlign: "center" }}>{done.already ? `You're already checked in, ${done.name}!` : `You're checked in, ${done.name}!`}</div>
@@ -539,6 +547,7 @@ function KioskScreen({ store, onCheckIn }) {
 
   return (
     <div style={kioskWrap}>
+      {exitBtn}
       <img src={LOGO} alt={CLINIC.name} style={{ height: 64, marginBottom: 18 }} />
       <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 40, color: C.teal, fontWeight: 700, textAlign: "center" }}>Welcome! Check in here.</div>
       <div style={{ fontSize: 20, color: C.inkSoft, margin: "10px 0 26px", textAlign: "center" }}>Type your name, then tap it below.</div>
