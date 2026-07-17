@@ -518,9 +518,11 @@ function KioskScreen({ store, onCheckIn }) {
 
   const pick = (m) => {
     const result = onCheckIn(m);
-    setDone({ name: firstName(m.name), already: result === "already" });
+    const st = monthState(m, (store.payments[monthKey(new Date())] || {})[m.id]?.entries);
+    const due = st.state === "outstanding" || st.state === "partial" ? st.remaining : 0;
+    setDone({ name: firstName(m.name), already: result === "already", due });
     clearTimeout(resetTimer.current);
-    resetTimer.current = setTimeout(reset, 5000);
+    resetTimer.current = setTimeout(reset, due > 0 ? 9000 : 5000);
   };
 
   const kioskWrap = { minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", padding: "6vh 24px 24px", fontFamily: "Inter, system-ui, sans-serif" };
@@ -540,6 +542,11 @@ function KioskScreen({ store, onCheckIn }) {
         <div style={{ width: 140, height: 140, borderRadius: 999, background: done.already ? C.gold : C.sage, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 84, marginBottom: 28 }}>✓</div>
         <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 44, color: C.teal, fontWeight: 700, textAlign: "center" }}>{done.already ? `You're already checked in, ${done.name}!` : `You're checked in, ${done.name}!`}</div>
         <div style={{ fontSize: 22, color: C.inkSoft, marginTop: 16, textAlign: "center" }}>Have a great workout. {CLINIC.tagline}</div>
+        {done.due > 0 && (
+          <div style={{ marginTop: 26, background: C.amberBg, color: C.amber, borderRadius: 16, padding: "16px 24px", fontSize: 20, fontWeight: 600, maxWidth: 560, textAlign: "center", lineHeight: 1.45 }}>
+            Friendly reminder — your {monthLabel(new Date())} membership has a balance of {money(done.due)}. Please stop by the front desk when you get a chance. 😊
+          </div>
+        )}
         <div style={{ fontSize: 15, color: C.inkSoft, marginTop: "6vh" }}>Tap anywhere for the next person</div>
       </div>
     );
@@ -636,6 +643,9 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, visitedOn, o
   const [q, setQ] = useState("");
   const active = store.members.filter((m) => m.status === "active");
   const present = active.filter((m) => visitedOn(m.id, day)).map((m) => ({ m, v: visitedOn(m.id, day) })).sort((a, b) => (vAt(a.v) || "").localeCompare(vAt(b.v) || ""));
+  // Amount this member still owes for the month being viewed (0 for paid/comped).
+  const owes = (m) => { const st = monthState(m, store.payments[day.slice(0, 7)]?.[m.id]?.entries); return st.state === "outstanding" || st.state === "partial" ? st.remaining : 0; };
+  const owingHere = present.filter(({ m }) => owes(m) > 0);
   const absent = active.filter((m) => !visitedOn(m.id, day)).filter((m) => m.name.toLowerCase().includes(q.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
   return (
     <>
@@ -652,11 +662,17 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, visitedOn, o
         <Stat label="Here this day" value={String(present.length)} accent={C.sage} />
         <Stat label="Active members" value={String(active.length)} accent={C.teal} />
       </div>
+      {owingHere.length > 0 && (
+        <div style={{ background: C.redBg, color: C.red, borderRadius: 12, padding: "12px 16px", fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 700, marginBottom: 14 }}>
+          💳 {owingHere.length === 1 ? `${owingHere[0].m.name} is here and hasn't paid this month` : `${owingHere.length} members here haven't paid this month`} — tap a name to record payment or send a reminder.
+        </div>
+      )}
       {present.length > 0 && (
         <Section title={`Here · ${present.length}`} color={C.sage}>
           {present.map(({ m, v }) => (
-            <div key={m.id} className="fr-row" style={{ ...rowBase, background: C.greenBg }}>
+            <div key={m.id} className="fr-row" style={{ ...rowBase, background: owes(m) > 0 ? C.redBg : C.greenBg }}>
               <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={() => openDetail(m.id)}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.sage, fontFamily: "Inter, sans-serif", fontWeight: 500 }}>{fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</div></div>
+              {owes(m) > 0 && <span style={{ ...pill, background: "#fff", color: C.red, border: `1px solid ${C.red}`, fontWeight: 700 }}>Owes {money(owes(m))}</span>}
               <button className="fr-btn" onClick={() => onToggle(m.id)} style={ghostBtn}>Undo</button>
             </div>
           ))}
