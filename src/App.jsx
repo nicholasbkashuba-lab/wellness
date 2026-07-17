@@ -380,6 +380,16 @@ export default function App() {
     persist({ ...store, visits: { ...store.visits, [member.id]: [...list, { at: new Date().toISOString(), by: "Kiosk" }] } });
     return "ok";
   };
+  // Kiosk "I'm new" flow: create the member (flagged for front-desk review) and check them in, in one save.
+  const kioskAddAndCheckIn = (name) => {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) return null;
+    const existing = store.members.find((m) => m.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (existing) { kioskCheckIn(existing); return existing; }
+    const m = normMember({ id: uid(), name: trimmed, startDate: todayISO(), notes: "Self-added at kiosk — front desk: please confirm details", activity: [{ id: uid(), at: new Date().toISOString(), type: "note", text: "Added via kiosk check-in" }] });
+    persist({ ...store, members: [...store.members, m], visits: { ...store.visits, [m.id]: [{ at: new Date().toISOString(), by: "Kiosk" }] } });
+    return m;
+  };
 
   const saveEmployee = (data) => { let employees; if (data.id) employees = store.employees.map((e) => (e.id === data.id ? { ...e, ...data } : e)); else employees = [...store.employees, normEmployee({ ...data, id: uid(), color: data.color || EMP_COLORS[store.employees.length % EMP_COLORS.length] }, store.employees.length)]; persist({ ...store, employees }); flash(data.id ? "Staff updated" : "Staff added"); };
   const deleteEmployee = (id) => { persist({ ...store, employees: store.employees.filter((e) => e.id !== id) }); flash("Staff removed"); };
@@ -400,7 +410,7 @@ export default function App() {
   const detailMember = detailId ? store.members.find((m) => m.id === detailId) : null;
 
   if (loading) return <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ color: C.inkSoft, fontFamily: "Inter, system-ui, sans-serif" }}>Loading your clinic…</div></div>;
-  if (IS_KIOSK) return <KioskScreen store={store} onCheckIn={kioskCheckIn} />;
+  if (IS_KIOSK) return <KioskScreen store={store} onCheckIn={kioskCheckIn} onAddAndCheckIn={kioskAddAndCheckIn} />;
   if (!store.meta?.adminCode) return <SetupScreen onSetup={(code) => { const next = { ...store, meta: { ...store.meta, adminCode: code } }; setStore(next); storage.set(STORE_KEY, JSON.stringify(next)).catch(() => {}); setUnlocked(true); setCurrentStaff({ name: "Admin", role: "Owner", isAdmin: true }); }} />;
   if (!unlocked) return <LockScreen employees={store.employees} adminCode={store.meta.adminCode} onUnlock={(staff) => { setUnlocked(true); setCurrentStaff(staff); }} />;
 
@@ -492,13 +502,14 @@ export default function App() {
 
 // =================== SETUP & LOCK ===================
 // =================== KIOSK (iPad self check-in) ===================
-function KioskScreen({ store, onCheckIn }) {
+function KioskScreen({ store, onCheckIn, onAddAndCheckIn }) {
   const [q, setQ] = useState("");
-  const [done, setDone] = useState(null); // { name, already }
+  const [done, setDone] = useState(null); // { name, already, due, isNew }
+  const [adding, setAdding] = useState(false); // confirming "I'm new" add
   const inputRef = React.useRef(null);
   const resetTimer = React.useRef(null);
 
-  const reset = () => { setQ(""); setDone(null); clearTimeout(resetTimer.current); setTimeout(() => inputRef.current?.focus(), 50); };
+  const reset = () => { setQ(""); setDone(null); setAdding(false); clearTimeout(resetTimer.current); setTimeout(() => inputRef.current?.focus(), 50); };
 
   // Auto-clear whatever was typed after 45s of inactivity so the next person gets a fresh screen.
   useEffect(() => {
@@ -522,7 +533,16 @@ function KioskScreen({ store, onCheckIn }) {
     const due = st.state === "outstanding" || st.state === "partial" ? st.remaining : 0;
     setDone({ name: firstName(m.name), already: result === "already", due });
     clearTimeout(resetTimer.current);
-    resetTimer.current = setTimeout(reset, due > 0 ? 9000 : 5000);
+    resetTimer.current = setTimeout(reset, due > 0 ? 15000 : 6000);
+  };
+
+  const addMe = () => {
+    const m = onAddAndCheckIn(q);
+    if (!m) { setAdding(false); return; }
+    setDone({ name: firstName(m.name), already: false, due: rateOf(m), isNew: true });
+    setAdding(false);
+    clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(reset, 15000);
   };
 
   const kioskWrap = { minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", padding: "6vh 24px 24px", fontFamily: "Inter, system-ui, sans-serif" };
@@ -540,14 +560,20 @@ function KioskScreen({ store, onCheckIn }) {
         {exitBtn}
         <img src={LOGO} alt={CLINIC.name} style={{ height: 64, marginBottom: "5vh" }} />
         <div style={{ width: 140, height: 140, borderRadius: 999, background: done.already ? C.gold : C.sage, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 84, marginBottom: 28 }}>✓</div>
-        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 44, color: C.teal, fontWeight: 700, textAlign: "center" }}>{done.already ? `You're already checked in, ${done.name}!` : `You're checked in, ${done.name}!`}</div>
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 44, color: C.teal, fontWeight: 700, textAlign: "center" }}>{done.isNew ? `Welcome, ${done.name} — you're checked in!` : done.already ? `You're already checked in, ${done.name}!` : `You're checked in, ${done.name}!`}</div>
         <div style={{ fontSize: 22, color: C.inkSoft, marginTop: 16, textAlign: "center" }}>Have a great workout. {CLINIC.tagline}</div>
         {done.due > 0 && (
           <div style={{ marginTop: 26, background: C.amberBg, color: C.amber, borderRadius: 16, padding: "16px 24px", fontSize: 20, fontWeight: 600, maxWidth: 560, textAlign: "center", lineHeight: 1.45 }}>
-            Friendly reminder — your {monthLabel(new Date())} membership has a balance of {money(done.due)}. Please stop by the front desk when you get a chance. 😊
+            {done.isNew
+              ? `Welcome aboard! Please stop by the front desk to finish setting up your membership (${money(done.due)}/month). 😊`
+              : `Friendly reminder — your ${monthLabel(new Date())} membership has a balance of ${money(done.due)}. Please stop by the front desk when you get a chance. 😊`}
           </div>
         )}
-        <div style={{ fontSize: 15, color: C.inkSoft, marginTop: "6vh" }}>Tap anywhere for the next person</div>
+        <button className="fr-btn" onClick={(e) => { e.stopPropagation(); reset(); }}
+          style={{ marginTop: 30, fontSize: 24, fontWeight: 700, color: "#fff", background: C.teal, border: "none", borderRadius: 16, padding: "18px 64px", cursor: "pointer", fontFamily: "Inter, system-ui, sans-serif" }}>
+          Okay 👍
+        </button>
+        <div style={{ fontSize: 15, color: C.inkSoft, marginTop: 24 }}>Tap anywhere for the next person</div>
       </div>
     );
   }
@@ -568,9 +594,24 @@ function KioskScreen({ store, onCheckIn }) {
         style={{ width: "100%", maxWidth: 560, fontSize: 28, padding: "18px 22px", borderRadius: 16, border: `2px solid ${C.line}`, outline: "none", background: "#fff", color: C.ink, textAlign: "center" }}
       />
       <div style={{ width: "100%", maxWidth: 560, marginTop: 18, display: "flex", flexDirection: "column", gap: 12 }}>
-        {q.trim().length >= 2 && matches.length === 0 && (
-          <div style={{ textAlign: "center", fontSize: 19, color: C.inkSoft, padding: "18px 12px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14 }}>
-            We can't find that name — please check the spelling, or ask the front desk and we'll get you set up.
+        {q.trim().length >= 2 && matches.length === 0 && !adding && (
+          <div style={{ textAlign: "center", fontSize: 19, color: C.inkSoft, padding: "20px 16px", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14 }}>
+            <div>We can't find that name — double-check the spelling…</div>
+            <button className="fr-btn" onClick={() => setAdding(true)}
+              style={{ marginTop: 14, fontSize: 20, fontWeight: 700, color: "#fff", background: C.coral, border: "none", borderRadius: 14, padding: "14px 28px", cursor: "pointer", fontFamily: "Inter, system-ui, sans-serif" }}>
+              I'm new — add me &amp; check in
+            </button>
+          </div>
+        )}
+        {adding && (
+          <div style={{ textAlign: "center", padding: "22px 18px", background: "#fff", border: `2px solid ${C.teal}`, borderRadius: 16 }}>
+            <div style={{ fontSize: 20, color: C.ink, fontWeight: 600 }}>Add you as a new member?</div>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, color: C.teal, fontWeight: 700, margin: "10px 0 4px" }}>{q.trim()}</div>
+            <div style={{ fontSize: 15, color: C.inkSoft }}>Make sure your name is spelled the way you want it.</div>
+            <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 18 }}>
+              <button className="fr-btn" onClick={() => setAdding(false)} style={{ fontSize: 18, color: C.ink, background: "#fff", border: `2px solid ${C.line}`, borderRadius: 14, padding: "14px 26px", cursor: "pointer", fontFamily: "Inter, system-ui, sans-serif" }}>Go back</button>
+              <button className="fr-btn" onClick={addMe} style={{ fontSize: 18, fontWeight: 700, color: "#fff", background: C.sage, border: "none", borderRadius: 14, padding: "14px 26px", cursor: "pointer", fontFamily: "Inter, system-ui, sans-serif" }}>Yes, that's me ✓</button>
+            </div>
           </div>
         )}
         {matches.map((m) => (
