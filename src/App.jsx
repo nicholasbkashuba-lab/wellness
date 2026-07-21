@@ -549,6 +549,25 @@ function KioskScreen({ store, onCheckIn, onAddAndCheckIn }) {
 
   const reset = () => { setQ(""); setDone(null); setAdding(false); clearTimeout(resetTimer.current); setTimeout(() => inputRef.current?.focus(), 50); };
 
+  // Keep the screen awake while the kiosk is showing. The wake lock is
+  // re-acquired whenever the OS releases it (tab refocus, iOS letting go),
+  // and as a fallback on any touch. Requires iPadOS/Safari 16.4+.
+  useEffect(() => {
+    let lock = null; let cancelled = false;
+    const acquire = async () => {
+      try {
+        if (cancelled || !("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+        lock = await navigator.wakeLock.request("screen");
+        lock.addEventListener?.("release", () => { if (!cancelled) setTimeout(acquire, 1000); });
+      } catch {}
+    };
+    acquire();
+    const onVis = () => { if (document.visibilityState === "visible") acquire(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pointerdown", acquire);
+    return () => { cancelled = true; document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pointerdown", acquire); try { lock?.release(); } catch {} };
+  }, []);
+
   // Auto-clear whatever was typed after 45s of inactivity so the next person gets a fresh screen.
   useEffect(() => {
     if (!q && !done) return;
