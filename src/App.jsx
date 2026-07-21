@@ -30,16 +30,43 @@ const storage = {
   },
   async set(key, value) {
     try { localStorage.setItem(key, value); } catch {}
-    const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ key, value }) });
-    if (!res.ok) throw new Error("save failed");
-    return { key, value };
+    try {
+      const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ key, value }) });
+      if (!res.ok) throw new Error("save failed");
+      pendingSaves.delete(key); // a newer save made it — drop any stale retry
+      return { key, value };
+    } catch (e) {
+      pendingSaves.set(key, value); // keep retrying in the background until the server confirms
+      throw e;
+    }
   },
   async delete(key) {
     try { localStorage.removeItem(key); } catch {}
+    pendingSaves.delete(key);
     try { await fetch(`${API}?key=${encodeURIComponent(key)}`, { method: "DELETE", headers: apiHeaders }); } catch {}
     return { key, deleted: true };
   },
 };
+
+// --- Save retry queue -----------------------------------------------------
+// If a save fails (wifi blip, server hiccup), the latest value for each key
+// is kept here and re-sent every few seconds — and immediately when the
+// connection comes back — until the server confirms. Edits are never lost as
+// long as the tab eventually regains a connection.
+const pendingSaves = new Map();
+async function flushPendingSaves() {
+  for (const [key, value] of Array.from(pendingSaves.entries())) {
+    try {
+      const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ key, value }) });
+      if (res.ok && pendingSaves.get(key) === value) pendingSaves.delete(key);
+    } catch {}
+  }
+}
+if (typeof window !== "undefined") {
+  setInterval(flushPendingSaves, 7000);
+  window.addEventListener("online", flushPendingSaves);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) flushPendingSaves(); });
+}
 
 
 // Embedded First Rehabilitation logo (data URI injected at build)
@@ -55,7 +82,18 @@ const C = {
 const CLINIC = { name: "First Rehabilitation Inc.", addr: "733 US Highway 1, Suite 2A, North Palm Beach, FL 33408", tagline: "Heal. Strengthen. Thrive." };
 // Kiosk mode: open the app at /?kiosk (or #kiosk) for the front-desk iPad
 // self check-in screen. Check-in only — no PIN, no billing data shown.
-const IS_KIOSK = typeof window !== "undefined" && (window.location.search.includes("kiosk") || window.location.hash.includes("kiosk"));
+// Sticky: once a device enters kiosk mode it stays there across launches
+// (needed for installed home-screen apps, which reopen at "/"), until staff
+// tap Exit kiosk.
+const KIOSK_FLAG = "wellness:kioskMode";
+const IS_KIOSK = (() => {
+  if (typeof window === "undefined") return false;
+  const fromUrl = window.location.search.includes("kiosk") || window.location.hash.includes("kiosk");
+  let stored = false; try { stored = localStorage.getItem(KIOSK_FLAG) === "1"; } catch {}
+  if (fromUrl) { try { localStorage.setItem(KIOSK_FLAG, "1"); } catch {} }
+  return fromUrl || stored;
+})();
+const exitKiosk = () => { try { localStorage.removeItem(KIOSK_FLAG); } catch {} window.location.href = window.location.pathname; };
 const METHODS = ["Cash", "Check", "Card", "Recurring", "Comp"];
 const STATUSES = ["active", "paused", "cancelled"];
 const STORE_KEY = "wellness:store:v1";
@@ -548,7 +586,7 @@ function KioskScreen({ store, onCheckIn, onAddAndCheckIn }) {
   const kioskWrap = { minHeight: "100vh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", padding: "6vh 24px 24px", fontFamily: "Inter, system-ui, sans-serif" };
   // Always-visible exit — safe to show, since leaving kiosk lands on the PIN lock screen.
   const exitBtn = (
-    <button className="fr-btn" onClick={(e) => { e.stopPropagation(); window.location.href = window.location.pathname; }}
+    <button className="fr-btn" onClick={(e) => { e.stopPropagation(); exitKiosk(); }}
       style={{ position: "fixed", top: 14, right: 16, background: "rgba(255,255,255,.85)", border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 14px", fontSize: 13, color: C.inkSoft, cursor: "pointer", fontFamily: "Inter, system-ui, sans-serif" }}>
       Exit kiosk
     </button>
@@ -621,7 +659,7 @@ function KioskScreen({ store, onCheckIn, onAddAndCheckIn }) {
           </button>
         ))}
       </div>
-      <div style={{ marginTop: "auto", paddingTop: 24, fontSize: 13, color: C.inkSoft, fontStyle: "italic" }}>{CLINIC.name} · {CLINIC.tagline} · <button className="fr-btn" onClick={() => { window.location.href = window.location.pathname; }} style={{ background: "none", border: "none", padding: 0, font: "inherit", color: C.inkSoft, textDecoration: "underline", cursor: "pointer" }}>Staff</button></div>
+      <div style={{ marginTop: "auto", paddingTop: 24, fontSize: 13, color: C.inkSoft, fontStyle: "italic" }}>{CLINIC.name} · {CLINIC.tagline} · <button className="fr-btn" onClick={exitKiosk} style={{ background: "none", border: "none", padding: 0, font: "inherit", color: C.inkSoft, textDecoration: "underline", cursor: "pointer" }}>Staff</button></div>
     </div>
   );
 }
