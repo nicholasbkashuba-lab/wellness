@@ -281,6 +281,30 @@ export default function App() {
   const [staffOpen, setStaffOpen] = useState(false);
   const [dayOpen, setDayOpen] = useState(null);
   const [toast, setToast] = useState("");
+  const [updateReady, setUpdateReady] = useState(false);
+
+  // Auto-update: compare the running bundle's hash against the server's
+  // current one (every 5 min and on tab focus). When a new deploy is live,
+  // the console shows an update banner and the kiosk refreshes itself
+  // between check-ins — open tabs no longer linger on old versions.
+  useEffect(() => {
+    const runningSrc = (document.querySelector('script[src*="/assets/index-"]') || {}).src || "";
+    const runningHash = (runningSrc.match(/index-([\w-]+)\.js/) || [])[1];
+    if (!runningHash) return; // dev server — no hashed bundle
+    const check = async () => {
+      try {
+        const res = await fetch("/", { cache: "no-store" });
+        const html = await res.text();
+        const liveHash = (html.match(/index-([\w-]+)\.js/) || [])[1];
+        if (liveHash && liveHash !== runningHash) setUpdateReady(true);
+      } catch {}
+    };
+    const id = setInterval(check, 5 * 60 * 1000);
+    const onVis = () => { if (!document.hidden) check(); };
+    document.addEventListener("visibilitychange", onVis);
+    check();
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
 
   // Tracks the exact server payload we last applied, so the live-sync poll
   // only re-renders when another device has actually changed the data.
@@ -448,7 +472,7 @@ export default function App() {
   const detailMember = detailId ? store.members.find((m) => m.id === detailId) : null;
 
   if (loading) return <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ color: C.inkSoft, fontFamily: "Inter, system-ui, sans-serif" }}>Loading your clinic…</div></div>;
-  if (IS_KIOSK) return <KioskScreen store={store} onCheckIn={kioskCheckIn} onAddAndCheckIn={kioskAddAndCheckIn} />;
+  if (IS_KIOSK) return <KioskScreen store={store} onCheckIn={kioskCheckIn} onAddAndCheckIn={kioskAddAndCheckIn} updateReady={updateReady} />;
   if (!store.meta?.adminCode) return <SetupScreen onSetup={(code) => { const next = { ...store, meta: { ...store.meta, adminCode: code } }; setStore(next); storage.set(STORE_KEY, JSON.stringify(next)).catch(() => {}); setUnlocked(true); setCurrentStaff({ name: "Admin", role: "Owner", isAdmin: true }); }} />;
   if (!unlocked) return <LockScreen employees={store.employees} adminCode={store.meta.adminCode} onUnlock={(staff) => { setUnlocked(true); setCurrentStaff(staff); }} />;
 
@@ -478,6 +502,13 @@ export default function App() {
             <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft }}>{currentStaff?.name || "Signed in"} · <button className="fr-btn" onClick={() => { window.location.href = window.location.pathname + "?kiosk"; }} style={linkBtn}>Kiosk mode</button> · <button className="fr-btn" onClick={lock} style={linkBtn}>Lock</button></div>
           </div>
         </header>
+
+        {updateReady && (
+          <button className="fr-btn" onClick={() => window.location.reload()}
+            style={{ display: "block", width: "100%", background: C.teal, color: "#fff", border: "none", borderRadius: 12, padding: "12px 16px", fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 16 }}>
+            ✨ A new version of the app is ready — tap here to update
+          </button>
+        )}
 
         <nav style={{ display: "flex", gap: 2, borderBottom: `1px solid ${C.line}`, marginBottom: 18, overflowX: "auto" }}>
           {[["dashboard", "Dashboard"], ["checkin", "Check-in"], ["billing", "Billing"], ["reports", "Reports"], ["members", "Members"], ["schedule", "Schedule"], ["history", "History"]].map(([k, label]) => (
@@ -540,10 +571,16 @@ export default function App() {
 
 // =================== SETUP & LOCK ===================
 // =================== KIOSK (iPad self check-in) ===================
-function KioskScreen({ store, onCheckIn, onAddAndCheckIn }) {
+function KioskScreen({ store, onCheckIn, onAddAndCheckIn, updateReady }) {
   const [q, setQ] = useState("");
   const [done, setDone] = useState(null); // { name, already, due, isNew }
   const [adding, setAdding] = useState(false); // confirming "I'm new" add
+
+  // Self-update: when a new deploy is live, reload as soon as the kiosk is
+  // idle (nobody mid-check-in), so the kiosk always runs the latest version.
+  useEffect(() => {
+    if (updateReady && !done && !adding && q === "") window.location.reload();
+  }, [updateReady, done, adding, q]);
   const inputRef = React.useRef(null);
   const resetTimer = React.useRef(null);
 
