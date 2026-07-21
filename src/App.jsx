@@ -782,7 +782,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
     );
   }
   const active = store.members.filter((m) => m.status === "active");
-  const present = active.filter((m) => visitedOn(m.id, day)).map((m) => ({ m, v: visitedOn(m.id, day) })).sort((a, b) => (vAt(a.v) || "").localeCompare(vAt(b.v) || ""));
+  const present = active.filter((m) => visitedOn(m.id, day)).map((m) => ({ m, v: visitedOn(m.id, day) })).sort((a, b) => (vAt(b.v) || "").localeCompare(vAt(a.v) || "")); // newest check-in first
   // Amount this member still owes for the month being viewed (0 for paid/comped).
   const owes = (m) => { const st = monthState(m, store.payments[day.slice(0, 7)]?.[m.id]?.entries); return st.state === "outstanding" || st.state === "partial" ? st.remaining : 0; };
   const owingHere = present.filter(({ m }) => owes(m) > 0);
