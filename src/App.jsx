@@ -414,6 +414,18 @@ export default function App() {
     setExpanded(null); flash(`${member.name}: ${money(entry.amount)} ${method}`);
   };
   const clearMonth = (member) => { const month = { ...monthPayments }; delete month[member.id]; persist({ ...store, payments: { ...store.payments, [mk]: month } }); flash(`Cleared ${member.name}`); };
+  // One-tap "mark paid" from the Check-in tab: records whatever the member
+  // still owes for the month of the day being viewed, using their usual method.
+  const markPaidForDay = (member, day) => {
+    const mkDay = day.slice(0, 7);
+    const byMonth = store.payments[mkDay] || {};
+    const st = monthState(member, byMonth[member.id]?.entries);
+    if (st.remaining <= 0) return;
+    const entry = { amount: st.remaining, method: member.method === "Comp" ? "Cash" : (member.method || "Cash"), date: day, note: "Marked paid at check-in", loggedAt: new Date().toISOString() };
+    const existing = byMonth[member.id]?.entries || [];
+    persist({ ...store, payments: { ...store.payments, [mkDay]: { ...byMonth, [member.id]: { entries: [...existing, entry] } } } });
+    flash(`${member.name} marked paid — ${money(entry.amount)} ${entry.method}`);
+  };
   const removeEntry = (member, idx) => { const entries = (store.payments[mk]?.[member.id]?.entries || []).filter((_, i) => i !== idx); persist({ ...store, payments: { ...store.payments, [mk]: { ...(store.payments[mk] || {}), [member.id]: { entries } } } }); };
   const deleteMember = (member) => {
     const members = store.members.filter((m) => m.id !== member.id);
@@ -518,7 +530,7 @@ export default function App() {
 
         {view === "dashboard" && <Dashboard monthLabelStr={monthLabel(monthDate)} onPrev={() => changeMonth(-1)} onNext={() => changeMonth(1)} store={store} mk={mk} collected={collected} outstandingAmt={outstandingAmt} settledCount={settled.length} expectedCount={monthMembers.length} methodTotals={methodTotals} monthsBehind={monthsBehind} visitsInMonth={visitsInMonth} openDetail={setDetailId} />}
 
-        {view === "checkin" && <CheckInTab store={store} day={attDay} isToday={attDay === tIso} onPrev={() => setAttDay((d) => addDaysISO(d, -1))} onNext={() => { if (attDay < tIso) setAttDay((d) => addDaysISO(d, 1)); }} onToday={() => setAttDay(tIso)} onPickDay={setAttDay} visitedOn={visitedOn} onToggle={(id) => toggleDay(id, attDay)} onExport={exportAttendanceCSV} openDetail={setDetailId} />}
+        {view === "checkin" && <CheckInTab store={store} day={attDay} isToday={attDay === tIso} onPrev={() => setAttDay((d) => addDaysISO(d, -1))} onNext={() => { if (attDay < tIso) setAttDay((d) => addDaysISO(d, 1)); }} onToday={() => setAttDay(tIso)} onPickDay={setAttDay} visitedOn={visitedOn} onToggle={(id) => toggleDay(id, attDay)} onMarkPaid={(m) => markPaidForDay(m, attDay)} onExport={exportAttendanceCSV} openDetail={setDetailId} />}
 
         {view === "billing" && (
           <>
@@ -774,7 +786,7 @@ function LockScreen({ employees, adminCode, onUnlock }) {
 }
 
 // =================== CHECK-IN / ATTENDANCE ===================
-function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, visitedOn, onToggle, onExport, openDetail }) {
+function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, visitedOn, onToggle, onMarkPaid, onExport, openDetail }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState("day"); // "day" | "calendar"
   const [calMonth, setCalMonth] = useState(() => keyToDate(day.slice(0, 7)));
@@ -849,7 +861,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
           {present.map(({ m, v }) => (
             <div key={m.id} className="fr-row" style={{ ...rowBase, background: owes(m) > 0 ? C.redBg : C.greenBg }}>
               <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={() => openDetail(m.id)}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.sage, fontFamily: "Inter, sans-serif", fontWeight: 500 }}>{fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</div></div>
-              {owes(m) > 0 && <span style={{ ...pill, background: "#fff", color: C.red, border: `1px solid ${C.red}`, fontWeight: 700 }}>Owes {money(owes(m))}</span>}
+              {owes(m) > 0 && <button className="fr-btn" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Record ${money(owes(m))} ${m.method === "Comp" ? "Cash" : (m.method || "Cash")} payment for ${m.name}?`)) onMarkPaid(m); }} style={{ ...pill, background: C.red, color: "#fff", border: "none", fontWeight: 700, cursor: "pointer" }}>Owes {money(owes(m))} · Mark paid ✓</button>}
               <button className="fr-btn" onClick={() => onToggle(m.id)} style={ghostBtn}>Undo</button>
             </div>
           ))}
@@ -861,6 +873,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
         <div style={cardList}>{absent.map((m) => (
           <div key={m.id} className="fr-row clickable" style={rowBase} onClick={() => onToggle(m.id)}>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.inkSoft, fontFamily: "Inter, sans-serif" }}>{rateOf(m) === 0 ? "No charge" : `${m.method} · ${money(rateOf(m))}/mo`}</div></div>
+            {owes(m) > 0 && <button className="fr-btn" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Record ${money(owes(m))} ${m.method === "Comp" ? "Cash" : (m.method || "Cash")} payment for ${m.name}?`)) onMarkPaid(m); }} style={{ ...pill, background: "#fff", color: C.red, border: `1px solid ${C.red}`, fontWeight: 700, cursor: "pointer" }}>Owes {money(owes(m))} ✓</button>}
             <span style={{ ...pill, background: C.cream, color: C.teal, border: `1px solid ${C.line}` }}>Check in</span>
           </div>
         ))}</div>
