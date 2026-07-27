@@ -106,7 +106,17 @@ export default async function handler(req, res) {
       ]);
       const sv = s.ok ? s.v : null;
       const nv = n.ok ? n.v : null;
-      const winner = sv && nv ? (sv.at >= nv.at ? sv : nv) : (sv || nv);
+      let winner = sv && nv ? (sv.at >= nv.at ? sv : nv) : (sv || nv);
+      // If the newest copy is empty but the other one holds real data, trust the
+      // data over the clock. Otherwise a blank database, simply by being newer,
+      // would keep hiding a good copy in the other database forever.
+      if (!metaOnly && sv && nv) {
+        const newer = sv.at >= nv.at ? sv : nv;
+        const older = sv.at >= nv.at ? nv : sv;
+        const newerN = memberCount(newer.value);
+        const olderN = memberCount(older.value);
+        if (olderN > 0 && (newerN === 0 || newerN < olderN / 2)) winner = older;
+      }
 
       if (!winner) return res.status(200).json({ key, value: null, updatedAt: null });
 
@@ -132,7 +142,19 @@ export default async function handler(req, res) {
         sbOn ? tryBackend("sb", () => sbSet(key, value, at)) : { ok: false, skipped: true },
         tryBackend("neon", () => neonSet(key, value, at)),
       ]);
-      if (writes.some((w) => w.ok)) return res.status(200).json({ key, value, updatedAt: iso(at) });
+      if (writes.some((w) => w.ok)) {
+        // Rolling snapshots so any bad state is always recoverable: one slot per
+        // hour of the day and one per day of the week, overwritten as they come
+        // around again. That is a bounded 31 extra rows, no migration needed,
+        // and it means the last ~24 hours and ~7 days are always retrievable.
+        // Only snapshot copies that actually contain members.
+        if (sbOn && memberCount(value) > 0) {
+          const d = new Date(at);
+          sbSet(`${key}#snap-h${d.getUTCHours()}`, value, at).catch(() => {});
+          sbSet(`${key}#snap-d${d.getUTCDay()}`, value, at).catch(() => {});
+        }
+        return res.status(200).json({ key, value, updatedAt: iso(at) });
+      }
       const err = writes.filter((w) => w.e).map((w) => String((w.e && w.e.message) || w.e)).join(" | ");
       return res.status(500).json({ error: "save failed: " + err });
     }

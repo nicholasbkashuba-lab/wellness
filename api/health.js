@@ -43,6 +43,21 @@ export default async function handler(req, res) {
     } catch (e) { out.supabase = { status: "unreachable", detail: short(e) }; }
   }
 
+  // Rolling snapshots, newest first — a recovery menu if the live copy is bad.
+  if (SB_URL && SB_KEY) {
+    try {
+      const r = await fetch(`${SB_URL}/rest/v1/wellness_store?key=like.${encodeURIComponent(STORE_KEY + "#snap-%")}&select=key,value,updated_at`, {
+        headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+      });
+      if (r.ok) {
+        const rows = await r.json();
+        out.snapshots = rows
+          .map((x) => ({ key: x.key, updatedAt: x.updated_at, bytes: (x.value || "").length, members: counts(x.value).members }))
+          .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      }
+    } catch {}
+  }
+
   try {
     const { rows } = await sql`SELECT value, length(value) AS bytes, updated_at FROM kv_store WHERE key = ${STORE_KEY}`;
     out.neon = rows[0]
