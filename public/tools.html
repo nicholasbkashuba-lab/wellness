@@ -74,6 +74,20 @@
 const KEY = "wellness:store:v1";
 const out = document.getElementById("out");
 const log = (m) => { out.textContent += "\n" + m; };
+
+// If the data API is locked with an access key, ask for it once per tab.
+let appKey = sessionStorage.getItem("wellnessAppKey") || "";
+const withKey = (h) => (appKey ? { ...(h || {}), "x-app-key": appKey } : (h || {}));
+async function api(url, opts) {
+  const o = opts || {};
+  let r = await fetch(url, { ...o, headers: withKey(o.headers) });
+  if (r.status === 401) {
+    appKey = window.prompt("This app's data is locked. Enter the access key:") || "";
+    if (appKey) sessionStorage.setItem("wellnessAppKey", appKey);
+    r = await fetch(url, { ...o, headers: withKey(o.headers) });
+  }
+  return r;
+}
 const money = (n) => "$" + Number(n || 0).toLocaleString();
 const isNoCharge = (m) => (m.method === "Comp") || /no charge/i.test(m.notes || "");
 const rateOf = (m) => (m.rate === 0 || m.rate === "0") ? 0 : (Number(m.rate) > 0 ? Number(m.rate) : 80);
@@ -81,14 +95,14 @@ const rateOf = (m) => (m.rate === 0 || m.rate === "0") ? 0 : (Number(m.rate) > 0
 let store = null;
 
 async function load() {
-  const r = await fetch(`/api/store?key=${encodeURIComponent(KEY)}`, { cache: "no-store" });
+  const r = await api(`/api/store?key=${encodeURIComponent(KEY)}`, { cache: "no-store" });
   if (!r.ok) throw new Error("read failed " + r.status);
   const d = await r.json();
   if (!d.value) throw new Error("nothing stored yet");
   return JSON.parse(d.value);
 }
 async function save(next) {
-  const r = await fetch("/api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: KEY, value: JSON.stringify(next) }) });
+  const r = await api("/api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: KEY, value: JSON.stringify(next) }) });
   if (!r.ok) throw new Error("save failed " + r.status + " " + (await r.text()));
 }
 const paidIn = (mk, id) => {
