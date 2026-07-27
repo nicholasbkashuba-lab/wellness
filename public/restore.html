@@ -104,13 +104,23 @@ async function restore(value, label) {
   }
 
   // Other databases
-  const dbRow = (name, d) => {
+  const dbRow = (name, d, src) => {
     if (!d) return `<div class="row"><div><b>${name}</b><div class="meta">unknown</div></div></div>`;
     if (d.status !== "ok") return `<div class="row"><div><b>${name}</b><div class="meta">unavailable — ${(d.detail || d.status || "").slice(0, 140)}</div></div></div>`;
     if (!d.hasData) return `<div class="row"><div><b>${name}</b><div class="meta">reachable, holds nothing</div></div></div>`;
-    return `<div class="row"><div><b>${name}</b><div class="meta">${d.members} members · ${d.payments} payments · ${d.paymentMonths} months · updated ${d.updatedAt}</div></div></div>`;
+    return `<div class="row"><div><b>${name}</b><div class="meta">${d.members} members · ${d.payments} payments · ${d.paymentMonths} months · ${d.visitsFor || 0} members with check-ins · updated ${d.updatedAt}</div></div>${src ? `<button data-src="${src}">Restore this copy</button>` : ""}</div>`;
   };
-  document.getElementById("others").innerHTML = "<h2>Other databases</h2>" + dbRow("Supabase (in use)", health.supabase) + dbRow("Original database", health.neon);
+  document.getElementById("others").innerHTML = "<h2>Other databases</h2>" + dbRow("Supabase (in use)", health.supabase, null) + dbRow("Original database", health.neon, "neon");
+  document.querySelectorAll("[data-src]").forEach((btn) => btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/store?key=${encodeURIComponent(KEY)}&source=${btn.dataset.src}`, { cache: "no-store" });
+      const d = await r.json();
+      if (!r.ok || !d.value) throw new Error(d.error || "that database returned nothing");
+      await restore(d.value, "the original database's copy");
+    } catch (e) { log("❌ " + (e.message || e)); alert("Couldn't read it: " + (e.message || e)); }
+    btn.disabled = false;
+  }));
 
   // Snapshots
   const snaps = Array.isArray(health.snapshots) ? health.snapshots.filter((s) => s.members > 0) : [];
