@@ -49,6 +49,22 @@ const KEY = "wellness:store:v1";
 const out = document.getElementById("out");
 const log = (m) => { out.textContent += "\n" + m; };
 
+// If the data API is locked with an access key, ask for it once and remember
+// it for this tab only. Without this, turning the key on would lock this page
+// out of the very data it exists to repair.
+let appKey = sessionStorage.getItem("wellnessAppKey") || "";
+const withKey = (h) => (appKey ? { ...(h || {}), "x-app-key": appKey } : (h || {}));
+async function api(url, opts) {
+  const o = opts || {};
+  let r = await fetch(url, { ...o, headers: withKey(o.headers) });
+  if (r.status === 401) {
+    appKey = window.prompt("This app's data is locked. Enter the access key:") || "";
+    if (appKey) sessionStorage.setItem("wellnessAppKey", appKey);
+    r = await fetch(url, { ...o, headers: withKey(o.headers) });
+  }
+  return r;
+}
+
 const stats = (raw) => {
   try {
     const s = JSON.parse(raw);
@@ -65,13 +81,13 @@ const describe = (st) => st.ok
   : `Could not read: ${st.error}`;
 
 async function getValue(key) {
-  const r = await fetch(`/api/store?key=${encodeURIComponent(key)}`, { cache: "no-store" });
+  const r = await api(`/api/store?key=${encodeURIComponent(key)}`, { cache: "no-store" });
   if (!r.ok) throw new Error("read failed: " + r.status);
   const d = await r.json();
   return d.value;
 }
 async function putValue(value) {
-  const r = await fetch("/api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: KEY, value }) });
+  const r = await api("/api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: KEY, value }) });
   if (!r.ok) throw new Error("save failed: " + r.status + " " + (await r.text()));
 }
 async function restore(value, label) {
@@ -90,7 +106,7 @@ async function restore(value, label) {
 
 (async function init() {
   let health = null;
-  try { health = await (await fetch("/api/health", { cache: "no-store" })).json(); }
+  try { health = await (await api("/api/health", { cache: "no-store" })).json(); }
   catch (e) { document.getElementById("live").innerHTML = "<h2>Currently in the app</h2><div class='meta'>Couldn't reach /api/health.</div>"; return; }
 
   // Live copy
@@ -114,7 +130,7 @@ async function restore(value, label) {
   document.querySelectorAll("[data-src]").forEach((btn) => btn.addEventListener("click", async () => {
     btn.disabled = true;
     try {
-      const r = await fetch(`/api/store?key=${encodeURIComponent(KEY)}&source=${btn.dataset.src}`, { cache: "no-store" });
+      const r = await api(`/api/store?key=${encodeURIComponent(KEY)}&source=${btn.dataset.src}`, { cache: "no-store" });
       const d = await r.json();
       if (!r.ok || !d.value) throw new Error(d.error || "that database returned nothing");
       await restore(d.value, "the original database's copy");
