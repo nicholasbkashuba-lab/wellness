@@ -12,6 +12,9 @@ const apiHeaders = APP_KEY ? { "x-app-key": APP_KEY } : {};
 // Last server timestamp we have applied, so the live-sync poll can tell
 // "unchanged" from "someone else edited" without downloading the document.
 let lastServerAt = null;
+// How many members a stored document holds — used to refuse a sync that would
+// replace real data with an empty or near-empty copy.
+const memberCount = (raw) => { try { const s = JSON.parse(raw); return Array.isArray(s.members) ? s.members.length : 0; } catch { return 0; } };
 
 const storage = {
   // Tiny request (~60 bytes) used by the live-sync poll.
@@ -26,6 +29,18 @@ const storage = {
       if (res.ok) {
         const data = await res.json();
         if (data && data.value != null) {
+          // Safety valve: never let a drastically emptier server copy replace a
+          // fuller local one. A blank/reset database would otherwise wipe every
+          // device as it connects. Instead we keep the local copy and push it
+          // back up, which also makes any untouched device a recovery source.
+          let local = null; try { local = localStorage.getItem(key); } catch {}
+          const remoteN = memberCount(data.value);
+          const localN = local == null ? -1 : memberCount(local);
+          if (localN > 0 && (remoteN === 0 || remoteN < localN / 2)) {
+            console.warn(`Server copy has ${remoteN} members but this device has ${localN} — keeping the local copy and restoring it to the server.`);
+            try { await storage.set(key, local); } catch {}
+            return { key, value: local };
+          }
           lastServerAt = data.updatedAt || null;
           try { localStorage.setItem(key, data.value); } catch {}
           return { key, value: data.value };

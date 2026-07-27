@@ -25,6 +25,9 @@ const SB_TABLE = "wellness_store";
 const sbHeaders = () => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" });
 const ts = (x) => { const t = new Date(x || 0).getTime(); return Number.isFinite(t) ? t : 0; };
 const iso = (ms) => new Date(ms || 0).toISOString();
+// Members held in a stored document — used to refuse writes that would replace
+// real data with an empty copy.
+const memberCount = (raw) => { try { const s = JSON.parse(raw); return Array.isArray(s.members) ? s.members.length : 0; } catch { return 0; } };
 
 // Circuit breaker: when a database is failing (quota, suspended, unreachable),
 // stop hammering it for a while instead of paying its latency on every request.
@@ -109,9 +112,14 @@ export default async function handler(req, res) {
 
       if (metaOnly) return res.status(200).json({ key, updatedAt: iso(winner.at), exists: true });
 
-      // Heal whichever side is missing or stale (best-effort, never blocking).
-      if (sbOn && s.ok && (!sv || sv.at < winner.at)) sbSet(key, winner.value, winner.at).catch(() => {});
-      if (n.ok && (!nv || nv.at < winner.at)) neonSet(key, winner.value, winner.at).catch(() => {});
+      // Heal whichever side is missing or stale (best-effort, never blocking) —
+      // but NEVER overwrite a copy that holds real data with a drastically
+      // emptier one, even if the emptier one is newer. Without this, a blank
+      // database would erase the good copy in the other database.
+      const wN = memberCount(winner.value);
+      const safeToOverwrite = (existing) => { if (!existing) return true; const eN = memberCount(existing.value); return !(eN > 0 && (wN === 0 || wN < eN / 2)); };
+      if (sbOn && s.ok && (!sv || sv.at < winner.at) && safeToOverwrite(sv)) sbSet(key, winner.value, winner.at).catch(() => {});
+      if (n.ok && (!nv || nv.at < winner.at) && safeToOverwrite(nv)) neonSet(key, winner.value, winner.at).catch(() => {});
 
       return res.status(200).json({ key, value: winner.value, updatedAt: iso(winner.at) });
     }

@@ -10,6 +10,15 @@ const SB_URL = process.env.SUPABASE_URL;
 const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const STORE_KEY = "wellness:store:v1";
 const short = (e) => String((e && e.message) || e).slice(0, 200);
+const counts = (raw) => {
+  try {
+    const s = JSON.parse(raw);
+    const months = s.payments && typeof s.payments === "object" ? Object.keys(s.payments) : [];
+    let payments = 0;
+    months.forEach((m) => Object.values(s.payments[m] || {}).forEach((p) => { payments += (p && Array.isArray(p.entries) ? p.entries.length : 0); }));
+    return { members: Array.isArray(s.members) ? s.members.length : 0, paymentMonths: months.length, payments, visitsFor: s.visits ? Object.keys(s.visits).length : 0 };
+  } catch { return { parseError: true }; }
+};
 
 export default async function handler(req, res) {
   const out = {
@@ -28,15 +37,17 @@ export default async function handler(req, res) {
       else {
         const rows = await r.json();
         out.supabase = rows[0]
-          ? { status: "ok", hasData: true, bytes: (rows[0].value || "").length, updatedAt: rows[0].updated_at }
+          ? { status: "ok", hasData: true, bytes: (rows[0].value || "").length, updatedAt: rows[0].updated_at, ...counts(rows[0].value) }
           : { status: "ok", hasData: false };
       }
     } catch (e) { out.supabase = { status: "unreachable", detail: short(e) }; }
   }
 
   try {
-    const { rows } = await sql`SELECT length(value) AS bytes, updated_at FROM kv_store WHERE key = ${STORE_KEY}`;
-    out.neon = rows[0] ? { status: "ok", hasData: true, bytes: rows[0].bytes, updatedAt: rows[0].updated_at } : { status: "ok", hasData: false };
+    const { rows } = await sql`SELECT value, length(value) AS bytes, updated_at FROM kv_store WHERE key = ${STORE_KEY}`;
+    out.neon = rows[0]
+      ? { status: "ok", hasData: true, bytes: rows[0].bytes, updatedAt: rows[0].updated_at, ...counts(rows[0].value) }
+      : { status: "ok", hasData: false };
   } catch (e) { out.neon = { status: "error", detail: short(e) }; }
 
   const writable = out.supabase.status === "ok" || out.neon.status === "ok";
