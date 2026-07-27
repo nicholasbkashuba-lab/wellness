@@ -65,6 +65,7 @@ const storage = {
       return { key, value };
     } catch (e) {
       pendingSaves.set(key, value); // keep retrying in the background until the server confirms
+      if (!firstFailureAt) firstFailureAt = Date.now();
       throw e;
     }
   },
@@ -86,9 +87,13 @@ const storage = {
 // hosting bandwidth quota during a prolonged outage.
 const pendingSaves = new Map();
 let retryFailures = 0;
+// When the first save started failing. Drives the unmissable warning banner:
+// the app must never look like it is working while edits are not being stored.
+let firstFailureAt = 0;
+const saveHealth = () => ({ pending: pendingSaves.size, since: firstFailureAt });
 let nextRetryAt = 0;
 async function flushPendingSaves(force) {
-  if (!pendingSaves.size) { retryFailures = 0; return; }
+  if (!pendingSaves.size) { retryFailures = 0; firstFailureAt = 0; return; }
   if (!force && Date.now() < nextRetryAt) return;
   let anyFailed = false;
   for (const [key, value] of Array.from(pendingSaves.entries())) {
@@ -103,6 +108,7 @@ async function flushPendingSaves(force) {
     nextRetryAt = Date.now() + Math.min(7000 * Math.pow(2, retryFailures - 1), 5 * 60 * 1000);
   } else {
     retryFailures = 0; nextRetryAt = 0;
+    if (!pendingSaves.size) firstFailureAt = 0;
   }
 }
 if (typeof window !== "undefined") {
@@ -325,6 +331,19 @@ export default function App() {
   const [dayOpen, setDayOpen] = useState(null);
   const [toast, setToast] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
+  const [saveAlarm, setSaveAlarm] = useState(null);
+
+  // Watch save health. If anything has been unsaved for more than 15 seconds,
+  // say so loudly and keep saying it — an app that looks fine while edits are
+  // not reaching the server is worse than one that is obviously broken.
+  useEffect(() => {
+    const tick = () => {
+      const h = saveHealth();
+      setSaveAlarm(h.pending > 0 && h.since && Date.now() - h.since > 15000 ? { count: h.pending, minutes: Math.floor((Date.now() - h.since) / 60000) } : null);
+    };
+    const id = setInterval(tick, 3000);
+    return () => clearInterval(id);
+  }, []);
 
   // Auto-update: compare the running bundle's hash against the server's
   // current one (every 5 min and on tab focus). When a new deploy is live,
@@ -532,12 +551,13 @@ export default function App() {
   const detailMember = detailId ? store.members.find((m) => m.id === detailId) : null;
 
   if (loading) return <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ color: C.inkSoft, fontFamily: "Inter, system-ui, sans-serif" }}>Loading your clinic…</div></div>;
-  if (IS_KIOSK) return <KioskScreen store={store} onCheckIn={kioskCheckIn} onAddAndCheckIn={kioskAddAndCheckIn} updateReady={updateReady} />;
+  if (IS_KIOSK) return <><SaveAlarm alarm={saveAlarm} /><KioskScreen store={store} onCheckIn={kioskCheckIn} onAddAndCheckIn={kioskAddAndCheckIn} updateReady={updateReady} /></>;
   if (!store.meta?.adminCode) return <SetupScreen onSetup={(code) => { const next = { ...store, meta: { ...store.meta, adminCode: code } }; setStore(next); storage.set(STORE_KEY, JSON.stringify(next)).catch(() => {}); setUnlocked(true); setCurrentStaff({ name: "Admin", role: "Owner", isAdmin: true }); }} />;
   if (!unlocked) return <LockScreen employees={store.employees} adminCode={store.meta.adminCode} onUnlock={(staff) => { setUnlocked(true); setCurrentStaff(staff); }} />;
 
   return (
     <div style={wrap}>
+      <SaveAlarm alarm={saveAlarm} />
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; }
@@ -630,6 +650,27 @@ export default function App() {
 }
 
 // =================== SETUP & LOCK ===================
+// A banner that cannot be missed or dismissed while edits are not reaching the
+// server. The app must never look healthy while data is only on this device.
+function SaveAlarm({ alarm }) {
+  if (!alarm) return null;
+  return (
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#C0392B", color: "#fff", padding: "12px 18px", fontFamily: "Inter, system-ui, sans-serif", boxShadow: "0 2px 10px rgba(0,0,0,.25)" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 22 }}>⚠️</span>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>NOT SAVING — your recent changes are only on this device</div>
+          <div style={{ fontSize: 13, opacity: 0.95, marginTop: 2 }}>
+            Retrying since {alarm.minutes < 1 ? "under a minute" : `${alarm.minutes} minute${alarm.minutes === 1 ? "" : "s"}`} ago.
+            Write down anything you enter from now on, and keep this tab open — closing it loses the unsaved changes.
+          </div>
+        </div>
+        <button className="fr-btn" onClick={() => flushPendingSaves(true)} style={{ background: "#fff", color: "#C0392B", border: 0, borderRadius: 8, padding: "9px 16px", fontWeight: 700, cursor: "pointer", fontFamily: "Inter, system-ui, sans-serif" }}>Try again now</button>
+      </div>
+    </div>
+  );
+}
+
 // =================== KIOSK (iPad self check-in) ===================
 function KioskScreen({ store, onCheckIn, onAddAndCheckIn, updateReady }) {
   const [q, setQ] = useState("");
