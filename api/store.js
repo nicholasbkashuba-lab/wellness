@@ -8,9 +8,14 @@ import { sql } from "@vercel/postgres";
 //   * Reads return whichever copy is newest, and best-effort "heal" the stale
 //     side so both converge.
 //   * Writes go to both; the request succeeds if EITHER accepts it, so a
-//     paused/unreachable database never blocks the clinic.
-//   * Nothing is ever deleted. If Supabase env vars are absent, Neon alone is
-//     used, exactly like before.
+//     paused/quota-blocked database never blocks the clinic.
+//   * Nothing is ever deleted.
+//
+// Bandwidth: GET supports `&meta=1`, which returns only the document's
+// timestamp and size (a few dozen bytes) instead of the whole document. The
+// client polls that and downloads the full document only when it has actually
+// changed — without this, 5-second polling of a ~200KB document burns several
+// GB of transfer per day and trips hosting quotas.
 
 const SB_URL = process.env.SUPABASE_URL;
 const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -19,20 +24,30 @@ const SB_TABLE = "wellness_store";
 
 const sbHeaders = () => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" });
 const ts = (x) => { const t = new Date(x || 0).getTime(); return Number.isFinite(t) ? t : 0; };
+const iso = (ms) => new Date(ms || 0).toISOString();
 
-async function sbGet(key) {
-  const r = await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}&select=value,updated_at`, { headers: sbHeaders() });
+// Circuit breaker: when a database is failing (quota, suspended, unreachable),
+// stop hammering it for a while instead of paying its latency on every request.
+const BREAKER_MS = 10 * 60 * 1000;
+let sbBlockedUntil = 0;
+let neonBlockedUntil = 0;
+const now = () => Date.now();
+
+async function sbGet(key, metaOnly) {
+  const cols = metaOnly ? "updated_at" : "value,updated_at";
+  const r = await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}&select=${cols}`, { headers: sbHeaders() });
   if (!r.ok) throw new Error("supabase get " + r.status);
   const rows = await r.json();
-  return rows[0] ? { value: rows[0].value, at: ts(rows[0].updated_at) } : null;
+  if (!rows[0]) return null;
+  return { value: metaOnly ? undefined : rows[0].value, at: ts(rows[0].updated_at) };
 }
 async function sbSet(key, value, at) {
   const r = await fetch(`${SB_URL}/rest/v1/${SB_TABLE}`, {
     method: "POST",
     headers: { ...sbHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify({ key, value, updated_at: new Date(at || Date.now()).toISOString() }),
+    body: JSON.stringify({ key, value, updated_at: iso(at || now()) }),
   });
-  if (!r.ok) throw new Error("supabase set " + r.status + " " + (await r.text()));
+  if (!r.ok) throw new Error("supabase set " + r.status + " " + (await r.text()).slice(0, 200));
 }
 
 let neonReady = false;
@@ -41,60 +56,76 @@ async function neonEnsure() {
   await sql`CREATE TABLE IF NOT EXISTS kv_store (key text PRIMARY KEY, value text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())`;
   neonReady = true;
 }
-async function neonGet(key) {
+async function neonGet(key, metaOnly) {
   await neonEnsure();
-  const { rows } = await sql`SELECT value, updated_at FROM kv_store WHERE key = ${key}`;
-  return rows[0] ? { value: rows[0].value, at: ts(rows[0].updated_at) } : null;
+  const { rows } = metaOnly
+    ? await sql`SELECT updated_at FROM kv_store WHERE key = ${key}`
+    : await sql`SELECT value, updated_at FROM kv_store WHERE key = ${key}`;
+  if (!rows[0]) return null;
+  return { value: metaOnly ? undefined : rows[0].value, at: ts(rows[0].updated_at) };
 }
 async function neonSet(key, value, at) {
   await neonEnsure();
-  const when = new Date(at || Date.now()).toISOString();
-  await sql`INSERT INTO kv_store (key, value, updated_at) VALUES (${key}, ${value}, ${when})
+  await sql`INSERT INTO kv_store (key, value, updated_at) VALUES (${key}, ${value}, ${iso(at || now())})
             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at`;
 }
 
-const attempt = (p) => p.then((v) => ({ ok: true, v })).catch((e) => ({ ok: false, e }));
+// Run a backend call, tracking its circuit breaker.
+async function tryBackend(which, fn) {
+  const blockedUntil = which === "sb" ? sbBlockedUntil : neonBlockedUntil;
+  if (now() < blockedUntil) return { ok: false, skipped: true, e: new Error("temporarily skipped after recent failure") };
+  try {
+    const v = await fn();
+    if (which === "sb") sbBlockedUntil = 0; else neonBlockedUntil = 0;
+    return { ok: true, v };
+  } catch (e) {
+    if (which === "sb") sbBlockedUntil = now() + BREAKER_MS; else neonBlockedUntil = now() + BREAKER_MS;
+    return { ok: false, e };
+  }
+}
 
 export default async function handler(req, res) {
   const required = process.env.APP_ACCESS_KEY;
   if (required && req.headers["x-app-key"] !== required) {
     return res.status(401).json({ error: "unauthorized" });
   }
+  res.setHeader("Cache-Control", "no-store");
 
   try {
     if (req.method === "GET") {
       const key = req.query.key;
       if (!key) return res.status(400).json({ error: "missing key" });
+      const metaOnly = req.query.meta === "1";
 
-      if (!sbOn) {
-        const n = await attempt(neonGet(key));
-        return res.status(200).json({ key, value: n.ok && n.v ? n.v.value : null });
-      }
-
-      const [s, n] = await Promise.all([attempt(sbGet(key)), attempt(neonGet(key))]);
+      const [s, n] = await Promise.all([
+        sbOn ? tryBackend("sb", () => sbGet(key, metaOnly)) : { ok: false, skipped: true },
+        tryBackend("neon", () => neonGet(key, metaOnly)),
+      ]);
       const sv = s.ok ? s.v : null;
       const nv = n.ok ? n.v : null;
-      let winner = null;
-      if (sv && nv) winner = sv.at >= nv.at ? sv : nv;
-      else winner = sv || nv;
-      if (!winner) return res.status(200).json({ key, value: null });
+      const winner = sv && nv ? (sv.at >= nv.at ? sv : nv) : (sv || nv);
 
-      // Heal whichever side is missing or stale (best-effort, don't block).
-      if (s.ok && (!sv || (nv && nv.at > sv.at && winner === nv))) sbSet(key, winner.value, winner.at).catch(() => {});
-      if (n.ok && (!nv || (sv && sv.at > nv.at && winner === sv))) neonSet(key, winner.value, winner.at).catch(() => {});
+      if (!winner) return res.status(200).json({ key, value: null, updatedAt: null });
 
-      return res.status(200).json({ key, value: winner.value });
+      if (metaOnly) return res.status(200).json({ key, updatedAt: iso(winner.at), exists: true });
+
+      // Heal whichever side is missing or stale (best-effort, never blocking).
+      if (sbOn && s.ok && (!sv || sv.at < winner.at)) sbSet(key, winner.value, winner.at).catch(() => {});
+      if (n.ok && (!nv || nv.at < winner.at)) neonSet(key, winner.value, winner.at).catch(() => {});
+
+      return res.status(200).json({ key, value: winner.value, updatedAt: iso(winner.at) });
     }
 
     if (req.method === "POST") {
       const { key, value } = req.body || {};
       if (!key || typeof value !== "string") return res.status(400).json({ error: "bad request" });
-      const now = Date.now();
-      const writes = sbOn
-        ? await Promise.all([attempt(sbSet(key, value, now)), attempt(neonSet(key, value, now))])
-        : [await attempt(neonSet(key, value, now))];
-      if (writes.some((w) => w.ok)) return res.status(200).json({ key, value });
-      const err = writes.map((w) => String((w.e && w.e.message) || w.e)).join(" | ");
+      const at = now();
+      const writes = await Promise.all([
+        sbOn ? tryBackend("sb", () => sbSet(key, value, at)) : { ok: false, skipped: true },
+        tryBackend("neon", () => neonSet(key, value, at)),
+      ]);
+      if (writes.some((w) => w.ok)) return res.status(200).json({ key, value, updatedAt: iso(at) });
+      const err = writes.filter((w) => w.e).map((w) => String((w.e && w.e.message) || w.e)).join(" | ");
       return res.status(500).json({ error: "save failed: " + err });
     }
 
@@ -102,7 +133,7 @@ export default async function handler(req, res) {
       const key = req.query.key;
       if (!key) return res.status(400).json({ error: "missing key" });
       if (sbOn) { try { await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}`, { method: "DELETE", headers: sbHeaders() }); } catch {} }
-      try { await neonSet(key, "", Date.now()); } catch {} // tombstone, never hard-delete the backup
+      try { await neonSet(key, "", now()); } catch {} // tombstone, never hard-delete the backup
       return res.status(200).json({ key, deleted: true });
     }
 

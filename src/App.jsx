@@ -9,13 +9,24 @@ const API = "/api/store";
 const APP_KEY = import.meta.env.VITE_APP_ACCESS_KEY || "";
 const apiHeaders = APP_KEY ? { "x-app-key": APP_KEY } : {};
 
+// Last server timestamp we have applied, so the live-sync poll can tell
+// "unchanged" from "someone else edited" without downloading the document.
+let lastServerAt = null;
+
 const storage = {
+  // Tiny request (~60 bytes) used by the live-sync poll.
+  async meta(key) {
+    const res = await fetch(`${API}?key=${encodeURIComponent(key)}&meta=1`, { cache: "no-store", headers: apiHeaders });
+    if (!res.ok) throw new Error("meta failed");
+    return res.json();
+  },
   async get(key) {
     try {
       const res = await fetch(`${API}?key=${encodeURIComponent(key)}`, { cache: "no-store", headers: apiHeaders });
       if (res.ok) {
         const data = await res.json();
         if (data && data.value != null) {
+          lastServerAt = data.updatedAt || null;
           try { localStorage.setItem(key, data.value); } catch {}
           return { key, value: data.value };
         }
@@ -33,6 +44,8 @@ const storage = {
     try {
       const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ key, value }) });
       if (!res.ok) throw new Error("save failed");
+      const data = await res.json().catch(() => null);
+      if (data && data.updatedAt) lastServerAt = data.updatedAt;
       pendingSaves.delete(key); // a newer save made it — drop any stale retry
       return { key, value };
     } catch (e) {
@@ -53,19 +66,34 @@ const storage = {
 // is kept here and re-sent every few seconds — and immediately when the
 // connection comes back — until the server confirms. Edits are never lost as
 // long as the tab eventually regains a connection.
+// Retries use exponential backoff (7s → 15s → 30s → … → 5 min). A tight retry
+// loop re-uploads the whole document every few seconds, which can burn a
+// hosting bandwidth quota during a prolonged outage.
 const pendingSaves = new Map();
-async function flushPendingSaves() {
+let retryFailures = 0;
+let nextRetryAt = 0;
+async function flushPendingSaves(force) {
+  if (!pendingSaves.size) { retryFailures = 0; return; }
+  if (!force && Date.now() < nextRetryAt) return;
+  let anyFailed = false;
   for (const [key, value] of Array.from(pendingSaves.entries())) {
     try {
       const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ key, value }) });
-      if (res.ok && pendingSaves.get(key) === value) pendingSaves.delete(key);
-    } catch {}
+      if (res.ok) { if (pendingSaves.get(key) === value) pendingSaves.delete(key); }
+      else anyFailed = true;
+    } catch { anyFailed = true; }
+  }
+  if (anyFailed) {
+    retryFailures += 1;
+    nextRetryAt = Date.now() + Math.min(7000 * Math.pow(2, retryFailures - 1), 5 * 60 * 1000);
+  } else {
+    retryFailures = 0; nextRetryAt = 0;
   }
 }
 if (typeof window !== "undefined") {
-  setInterval(flushPendingSaves, 7000);
-  window.addEventListener("online", flushPendingSaves);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) flushPendingSaves(); });
+  setInterval(() => flushPendingSaves(false), 5000); // honours the backoff above
+  window.addEventListener("online", () => flushPendingSaves(true)); // reconnected — try at once
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) flushPendingSaves(true); });
 }
 
 
@@ -323,14 +351,19 @@ export default function App() {
     })();
   }, []);
 
-  // Live sync: poll the shared store so edits made by any user on any device
-  // show up here automatically, without reloading the page.
+  // Live sync: poll a tiny timestamp (~60 bytes) and download the full store
+  // only when another device has actually changed it. Polling the whole
+  // document instead would move gigabytes a day and trip hosting quotas.
   useEffect(() => {
     if (loading) return;
     let cancelled = false;
     const sync = async () => {
       if (document.hidden || savingRef.current) return;
       try {
+        const meta = await storage.meta(STORE_KEY);
+        if (cancelled || savingRef.current) return;
+        if (!meta || !meta.exists) return;
+        if (lastServerAt && meta.updatedAt === lastServerAt) return; // unchanged — nothing to download
         const res = await storage.get(STORE_KEY);
         if (cancelled || savingRef.current) return;
         const remote = res && res.value ? res.value : null;
@@ -339,7 +372,7 @@ export default function App() {
         setStore(normalizeStore(JSON.parse(remote)));
       } catch {}
     };
-    const id = setInterval(sync, 5000);
+    const id = setInterval(sync, 10000);
     const onVisible = () => { if (!document.hidden) sync(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { cancelled = true; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
