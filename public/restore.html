@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Restore data — First Rehabilitation</title>
+<style>
+  body{font-family:Inter,system-ui,Arial,sans-serif;background:#FBF7EF;color:#22343B;margin:0;padding:28px 16px;}
+  .wrap{max-width:820px;margin:0 auto;}
+  h1{font-family:Georgia,serif;font-size:24px;color:#1A5F7A;margin:0 0 4px;}
+  .sub{font-size:14px;color:#5C6B72;margin-bottom:22px;}
+  .card{background:#fff;border:1px solid #E7DECB;border-radius:14px;padding:18px 20px;margin-bottom:16px;}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:#5C6B72;margin:0 0 12px;}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #F0EADD;flex-wrap:wrap;}
+  .row:last-child{border-bottom:none;}
+  .big{font-size:20px;font-weight:700;color:#1A5F7A;}
+  .meta{font-size:13px;color:#5C6B72;}
+  button{font-size:14px;font-weight:600;color:#fff;background:#1A5F7A;border:0;border-radius:9px;padding:9px 16px;cursor:pointer;}
+  button.warn{background:#C75B39;}
+  button:disabled{background:#9ca3af;cursor:default;}
+  textarea{width:100%;min-height:120px;font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:10px;border:1px solid #E7DECB;border-radius:10px;background:#FCFAF5;}
+  pre{background:#0b1020;color:#d1fae5;padding:12px;border-radius:10px;font-size:12px;white-space:pre-wrap;margin-top:14px;}
+  .warnbox{background:#FBE9E0;color:#C75B39;border-radius:10px;padding:12px 14px;font-size:13px;font-weight:600;margin-bottom:16px;}
+  .okbox{background:#E7F0EC;color:#3E7A63;border-radius:10px;padding:12px 14px;font-size:13px;font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Restore data</h1>
+  <div class="sub">Pick a backup to put back, or paste a saved copy. Nothing changes until you confirm.</div>
+
+  <div class="warnbox">Restoring replaces what is currently in the app. A snapshot of the current state is taken automatically on the next save, but check the member counts below before you choose.</div>
+
+  <div class="card" id="live"><h2>Currently in the app</h2><div class="meta">Loading…</div></div>
+  <div class="card" id="others"><h2>Other databases</h2><div class="meta">Loading…</div></div>
+  <div class="card" id="snaps"><h2>Automatic backups</h2><div class="meta">Loading…</div></div>
+
+  <div class="card">
+    <h2>Paste a saved copy</h2>
+    <div class="meta" style="margin-bottom:10px">If you exported the data as JSON (for example from the old database's SQL editor), paste it here. It must contain a <code>members</code> list.</div>
+    <textarea id="paste" placeholder='{"members":[...],"payments":{...},"visits":{...}}'></textarea>
+    <div style="margin-top:10px"><button id="pasteBtn">Check &amp; restore this</button></div>
+  </div>
+
+  <pre id="out">Ready.</pre>
+</div>
+<script>
+const KEY = "wellness:store:v1";
+const out = document.getElementById("out");
+const log = (m) => { out.textContent += "\n" + m; };
+
+const stats = (raw) => {
+  try {
+    const s = JSON.parse(raw);
+    const months = s.payments && typeof s.payments === "object" ? Object.keys(s.payments).sort() : [];
+    let payments = 0, dollars = 0;
+    months.forEach((m) => Object.values(s.payments[m] || {}).forEach((p) => (p && Array.isArray(p.entries) ? p.entries : []).forEach((e) => { payments++; dollars += Number(e.amount) || 0; })));
+    const visitDays = new Set();
+    Object.values(s.visits || {}).forEach((list) => (list || []).forEach((v) => { const d = (typeof v === "string" ? v : v && v.at) || ""; if (d) visitDays.add(d.slice(0, 10)); }));
+    return { members: Array.isArray(s.members) ? s.members.length : 0, months, payments, dollars, visitDays: visitDays.size, ok: true };
+  } catch (e) { return { ok: false, error: String(e.message || e) }; }
+};
+const describe = (st) => st.ok
+  ? `${st.members} members · ${st.payments} payments totalling $${st.dollars.toLocaleString()} · months ${st.months[0] || "—"}–${st.months[st.months.length - 1] || "—"} · ${st.visitDays} days of check-ins`
+  : `Could not read: ${st.error}`;
+
+async function getValue(key) {
+  const r = await fetch(`/api/store?key=${encodeURIComponent(key)}`, { cache: "no-store" });
+  if (!r.ok) throw new Error("read failed: " + r.status);
+  const d = await r.json();
+  return d.value;
+}
+async function putValue(value) {
+  const r = await fetch("/api/store", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: KEY, value }) });
+  if (!r.ok) throw new Error("save failed: " + r.status + " " + (await r.text()));
+}
+async function restore(value, label) {
+  const st = stats(value);
+  if (!st.ok) { alert("That copy isn't readable, so nothing was changed."); return; }
+  if (!st.members) { alert("That copy has no members in it, so it won't be restored."); return; }
+  if (!confirm(`Restore ${label}?\n\n${describe(st)}\n\nThis replaces what is in the app now.`)) return;
+  log(`Restoring ${label}…`);
+  try {
+    await putValue(value);
+    log(`✅ Restored ${label}. ${describe(st)}`);
+    log("Open the app and refresh to see it. Other devices pick it up within ~10 seconds.");
+    alert("Restored. Open the app and refresh.");
+  } catch (e) { log("❌ " + (e.message || e)); alert("Restore failed: " + (e.message || e)); }
+}
+
+(async function init() {
+  let health = null;
+  try { health = await (await fetch("/api/health", { cache: "no-store" })).json(); }
+  catch (e) { document.getElementById("live").innerHTML = "<h2>Currently in the app</h2><div class='meta'>Couldn't reach /api/health.</div>"; return; }
+
+  // Live copy
+  try {
+    const v = await getValue(KEY);
+    const st = v ? stats(v) : null;
+    document.getElementById("live").innerHTML = "<h2>Currently in the app</h2>" +
+      (st ? `<div class="big">${st.members} members</div><div class="meta">${describe(st)}</div>` : `<div class="meta">Empty — nothing stored.</div>`);
+  } catch (e) {
+    document.getElementById("live").innerHTML = `<h2>Currently in the app</h2><div class="meta">${e.message}</div>`;
+  }
+
+  // Other databases
+  const dbRow = (name, d) => {
+    if (!d) return `<div class="row"><div><b>${name}</b><div class="meta">unknown</div></div></div>`;
+    if (d.status !== "ok") return `<div class="row"><div><b>${name}</b><div class="meta">unavailable — ${(d.detail || d.status || "").slice(0, 140)}</div></div></div>`;
+    if (!d.hasData) return `<div class="row"><div><b>${name}</b><div class="meta">reachable, holds nothing</div></div></div>`;
+    return `<div class="row"><div><b>${name}</b><div class="meta">${d.members} members · ${d.payments} payments · ${d.paymentMonths} months · updated ${d.updatedAt}</div></div></div>`;
+  };
+  document.getElementById("others").innerHTML = "<h2>Other databases</h2>" + dbRow("Supabase (in use)", health.supabase) + dbRow("Original database", health.neon);
+
+  // Snapshots
+  const snaps = Array.isArray(health.snapshots) ? health.snapshots.filter((s) => s.members > 0) : [];
+  if (!snaps.length) {
+    document.getElementById("snaps").innerHTML = "<h2>Automatic backups</h2><div class='meta'>None yet. From now on the app saves an hourly and a daily backup automatically, and they will appear here.</div>";
+  } else {
+    document.getElementById("snaps").innerHTML = "<h2>Automatic backups</h2>" + snaps.map((s, i) =>
+      `<div class="row"><div><b>${s.members} members</b><div class="meta">${s.updatedAt} · ${Math.round(s.bytes / 1024)} KB</div></div><button data-snap="${i}">Restore this</button></div>`).join("");
+    document.querySelectorAll("[data-snap]").forEach((btn) => btn.addEventListener("click", async () => {
+      const s = snaps[Number(btn.dataset.snap)];
+      btn.disabled = true;
+      try { const v = await getValue(s.key); await restore(v, `backup from ${s.updatedAt}`); }
+      catch (e) { log("❌ " + (e.message || e)); }
+      btn.disabled = false;
+    }));
+  }
+  log("Loaded. Choose a backup above, or paste a saved copy.");
+})();
+
+document.getElementById("pasteBtn").addEventListener("click", () => {
+  const raw = document.getElementById("paste").value.trim();
+  if (!raw) { alert("Paste the saved copy first."); return; }
+  restore(raw, "the pasted copy");
+});
+</script>
+</body>
+</html>
