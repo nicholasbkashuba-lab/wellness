@@ -22,6 +22,16 @@ const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const sbOn = !!(SB_URL && SB_KEY);
 const SB_TABLE = "wellness_store";
 
+// The original Neon database is a FROZEN ARCHIVE. It still holds the copy from
+// before the July outage — the only surviving record of July's payments and the
+// full check-in history — and its network-transfer quota resets on the 1st of
+// the month. If we kept writing to it, the first save (or heal) after that
+// reset would overwrite that copy and destroy the last chance to recover it.
+// So: reads yes, writes never. Redundancy now comes from Supabase plus the
+// rolling snapshots. Flip this to true only after the archive is recovered or
+// deliberately abandoned.
+const NEON_WRITES_ENABLED = false;
+
 const sbHeaders = () => ({ apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" });
 const ts = (x) => { const t = new Date(x || 0).getTime(); return Number.isFinite(t) ? t : 0; };
 const iso = (ms) => new Date(ms || 0).toISOString();
@@ -142,7 +152,7 @@ export default async function handler(req, res) {
       const wN = memberCount(winner.value);
       const safeToOverwrite = (existing) => { if (!existing) return true; const eN = memberCount(existing.value); return !(eN > 0 && (wN === 0 || wN < eN / 2)); };
       if (sbOn && s.ok && (!sv || sv.at < winner.at) && safeToOverwrite(sv)) sbSet(key, winner.value, winner.at).catch(() => {});
-      if (n.ok && (!nv || nv.at < winner.at) && safeToOverwrite(nv)) neonSet(key, winner.value, winner.at).catch(() => {});
+      if (NEON_WRITES_ENABLED && n.ok && !nv) neonSet(key, winner.value, winner.at).catch(() => {}); // only ever fills a gap, never replaces
 
       return res.status(200).json({ key, value: winner.value, updatedAt: iso(winner.at) });
     }
@@ -153,7 +163,7 @@ export default async function handler(req, res) {
       const at = now();
       const writes = await Promise.all([
         sbOn ? tryBackend("sb", () => sbSet(key, value, at)) : { ok: false, skipped: true },
-        tryBackend("neon", () => neonSet(key, value, at)),
+        NEON_WRITES_ENABLED ? tryBackend("neon", () => neonSet(key, value, at)) : { ok: false, skipped: true },
       ]);
       if (writes.some((w) => w.ok)) {
         // Rolling snapshots so any bad state is always recoverable: one slot per
@@ -176,7 +186,7 @@ export default async function handler(req, res) {
       const key = req.query.key;
       if (!key) return res.status(400).json({ error: "missing key" });
       if (sbOn) { try { await fetch(`${SB_URL}/rest/v1/${SB_TABLE}?key=eq.${encodeURIComponent(key)}`, { method: "DELETE", headers: sbHeaders() }); } catch {} }
-      try { await neonSet(key, "", now()); } catch {} // tombstone, never hard-delete the backup
+      if (NEON_WRITES_ENABLED) { try { await neonSet(key, "", now()); } catch {} } // tombstone, never hard-delete the backup
       return res.status(200).json({ key, deleted: true });
     }
 
