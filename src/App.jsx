@@ -6,8 +6,19 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 // permanently. localStorage is kept as an offline cache + fallback, and the
 // first load on a fresh database migrates any pre-existing local data up.
 const API = "/api/store";
-const APP_KEY = import.meta.env.VITE_APP_ACCESS_KEY || "";
-const apiHeaders = APP_KEY ? { "x-app-key": APP_KEY } : {};
+
+// Access password. Deliberately NOT compiled into the bundle — it is typed by
+// staff once per device and kept in this browser. That way the app's public
+// JavaScript contains no secret, and the server (APP_ACCESS_KEY) is the only
+// thing that decides who gets data. A device that has never been given the
+// password sees a locked screen and nothing else.
+const APPKEY_LS = "wellness:appKey";
+let appKey = "";
+try { appKey = localStorage.getItem(APPKEY_LS) || import.meta.env.VITE_APP_ACCESS_KEY || ""; } catch { appKey = ""; }
+const apiHeaders = appKey ? { "x-app-key": appKey } : {};
+let keyRejected = false;               // set when the server answers 401
+const needsKey = () => keyRejected;
+const saveAppKey = (k) => { try { localStorage.setItem(APPKEY_LS, k.trim()); } catch {} window.location.reload(); };
 
 // Last server timestamp we have applied, so the live-sync poll can tell
 // "unchanged" from "someone else edited" without downloading the document.
@@ -26,6 +37,7 @@ const storage = {
   async get(key) {
     try {
       const res = await fetch(`${API}?key=${encodeURIComponent(key)}`, { cache: "no-store", headers: apiHeaders });
+      if (res.status === 401) { keyRejected = true; return null; }
       if (res.ok) {
         const data = await res.json();
         if (data && data.value != null) {
@@ -58,6 +70,7 @@ const storage = {
     try { localStorage.setItem(key, value); } catch {}
     try {
       const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json", ...apiHeaders }, body: JSON.stringify({ key, value }) });
+      if (res.status === 401) { keyRejected = true; throw new Error("locked"); }
       if (!res.ok) throw new Error("save failed");
       const data = await res.json().catch(() => null);
       if (data && data.updatedAt) lastServerAt = data.updatedAt;
@@ -332,12 +345,14 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [updateReady, setUpdateReady] = useState(false);
   const [saveAlarm, setSaveAlarm] = useState(null);
+  const [locked, setLocked] = useState(false);
 
   // Watch save health. If anything has been unsaved for more than 15 seconds,
   // say so loudly and keep saying it — an app that looks fine while edits are
   // not reaching the server is worse than one that is obviously broken.
   useEffect(() => {
     const tick = () => {
+      if (needsKey()) setLocked(true);
       const h = saveHealth();
       setSaveAlarm(h.pending > 0 && h.since && Date.now() - h.since > 15000 ? { count: h.pending, minutes: Math.floor((Date.now() - h.since) / 60000) } : null);
     };
@@ -550,6 +565,7 @@ export default function App() {
 
   const detailMember = detailId ? store.members.find((m) => m.id === detailId) : null;
 
+  if (locked) return <KeyGate wrongKey={!!appKey} />;
   if (loading) return <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center" }}><div style={{ color: C.inkSoft, fontFamily: "Inter, system-ui, sans-serif" }}>Loading your clinic…</div></div>;
   if (IS_KIOSK) return <><SaveAlarm alarm={saveAlarm} /><KioskScreen store={store} onCheckIn={kioskCheckIn} onAddAndCheckIn={kioskAddAndCheckIn} updateReady={updateReady} /></>;
   if (!store.meta?.adminCode) return <SetupScreen onSetup={(code) => { const next = { ...store, meta: { ...store.meta, adminCode: code } }; setStore(next); storage.set(STORE_KEY, JSON.stringify(next)).catch(() => {}); setUnlocked(true); setCurrentStaff({ name: "Admin", role: "Owner", isAdmin: true }); }} />;
@@ -650,6 +666,29 @@ export default function App() {
 }
 
 // =================== SETUP & LOCK ===================
+// Device password screen. Shown when the server refuses this device's key, so
+// nothing — not the roster, not billing — is fetched before it is entered.
+// Entered once per device and remembered in this browser.
+function KeyGate({ wrongKey }) {
+  const [v, setV] = useState("");
+  const submit = () => { if (v.trim()) saveAppKey(v); };
+  return (
+    <div style={{ ...wrap, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600;700&display=swap');`}</style>
+      <div style={{ textAlign: "center", width: "100%", maxWidth: 380 }}>
+        <img src={LOGO} alt={CLINIC.name} style={{ height: 50, display: "block", margin: "0 auto 14px" }} />
+        <h2 style={{ fontFamily: "'Playfair Display', serif", color: C.teal, margin: "0 0 6px", fontSize: 22 }}>Clinic access password</h2>
+        <p style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginTop: 0 }}>
+          {wrongKey ? "That password wasn't accepted. Check it with the office and try again." : "This device hasn't been set up yet. Enter the clinic password once and this browser will remember it."}
+        </p>
+        <input type="password" value={v} autoFocus onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} placeholder="Password" style={{ ...input, textAlign: "center", marginTop: 8 }} />
+        <button className="fr-btn" onClick={submit} disabled={!v.trim()} style={{ ...primaryBtn, width: "100%", marginTop: 12, opacity: v.trim() ? 1 : 0.5 }}>Unlock this device</button>
+        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 14 }}>Staff PINs are separate — you'll still sign in after this.</div>
+      </div>
+    </div>
+  );
+}
+
 // A banner that cannot be missed or dismissed while edits are not reaching the
 // server. The app must never look healthy while data is only on this device.
 function SaveAlarm({ alarm }) {
