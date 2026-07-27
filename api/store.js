@@ -100,6 +100,19 @@ export default async function handler(req, res) {
       if (!key) return res.status(400).json({ error: "missing key" });
       const metaOnly = req.query.meta === "1";
 
+      // Read one specific database, bypassing the newest-wins comparison. Used
+      // by the restore page to pull a named copy (e.g. the original database
+      // once its quota clears) without waiting for it to look "newest".
+      const source = req.query.source;
+      if (source === "neon" || source === "supabase") {
+        const r = source === "neon"
+          ? await tryBackend("neon", () => neonGet(key, false))
+          : (sbOn ? await tryBackend("sb", () => sbGet(key, false)) : { ok: false, e: new Error("supabase not configured") });
+        if (!r.ok) return res.status(502).json({ error: `${source} unavailable: ` + String((r.e && r.e.message) || r.e).slice(0, 300) });
+        if (!r.v) return res.status(200).json({ key, value: null, updatedAt: null, source });
+        return res.status(200).json({ key, value: r.v.value, updatedAt: iso(r.v.at), source });
+      }
+
       const [s, n] = await Promise.all([
         sbOn ? tryBackend("sb", () => sbGet(key, metaOnly)) : { ok: false, skipped: true },
         tryBackend("neon", () => neonGet(key, metaOnly)),
