@@ -198,10 +198,17 @@ const sumEntries = (e = []) => e.reduce((s, x) => s + (Number(x.amount) || 0), 0
 const isComp = (e = []) => e.some((x) => x.method === "Comp");
 // Resolve a member's monthly rate. An explicit 0 means "No charge"; anything missing/invalid falls back to the default.
 const rateOf = (m) => { if (m && (m.rate === 0 || m.rate === "0")) return 0; const r = Number(m && m.rate); return Number.isFinite(r) && r > 0 ? r : DEFAULT_RATE; };
+// A member is no-charge either by a $0 rate or by having "Comp" as their method.
+const isNoCharge = (m) => !!m && (rateOf(m) === 0 || m.method === "Comp");
 function monthState(member, entries) {
   const paid = sumEntries(entries); const rate = rateOf(member);
   if (rate === 0) return { state: "comp", paid, rate: 0, remaining: 0 };
   if (isComp(entries)) return { state: "comp", paid, rate, remaining: 0 };
+  // A member whose payment method is "Comp" is a no-charge member. Before this,
+  // they only counted as comped once a Comp payment entry existed, so a comped
+  // member with no entry for the month showed as owing their full rate forever.
+  // If they did pay something, that still counts normally.
+  if (member && member.method === "Comp" && paid === 0) return { state: "comp", paid: 0, rate, remaining: 0 };
   if (rate > 0 && paid >= rate) return { state: "paid", paid, rate, remaining: 0 };
   if (paid > 0) return { state: "partial", paid, rate, remaining: rate - paid };
   return { state: "outstanding", paid: 0, rate, remaining: rate };
@@ -970,7 +977,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
   // Never print a dollar figure next to someone who doesn't owe it. Showing
   // every member's "$80/mo" rate here read as "$80 due" even after they paid.
   const settledLabel = (m) => {
-    if (rateOf(m) === 0) return "No charge";
+    if (isNoCharge(m)) return "No charge";
     if (owes(m) > 0) return m.method || "Cash";
     return `Paid ${isToday ? "this month" : monthLabel(keyToDate(day.slice(0, 7)))} ✓`;
   };
@@ -1008,7 +1015,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
               <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={() => openDetail(m.id)}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.sage, fontFamily: "Inter, sans-serif", fontWeight: 500 }}>{fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</div></div>
               {owes(m) > 0
                 ? <button className="fr-btn" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Record ${money(owes(m))} ${m.method === "Comp" ? "Cash" : (m.method || "Cash")} payment for ${m.name}?`)) onMarkPaid(m); }} style={{ ...pill, background: C.red, color: "#fff", border: "none", fontWeight: 700, cursor: "pointer" }}>Owes {money(owes(m))} · Mark paid ✓</button>
-                : <span style={{ ...pill, background: C.greenBg, color: C.sage, fontWeight: 700 }}>{rateOf(m) === 0 ? "No charge" : "Paid ✓"}</span>}
+                : <span style={{ ...pill, background: C.greenBg, color: C.sage, fontWeight: 700 }}>{isNoCharge(m) ? "No charge" : "Paid ✓"}</span>}
               <button className="fr-btn" onClick={() => onToggle(m.id)} style={ghostBtn}>Undo</button>
             </div>
           ))}
