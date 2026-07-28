@@ -967,6 +967,13 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
   const present = active.filter((m) => visitedOn(m.id, day)).map((m) => ({ m, v: visitedOn(m.id, day) })).sort((a, b) => (vAt(b.v) || "").localeCompare(vAt(a.v) || "")); // newest check-in first
   // Amount this member still owes for the month being viewed (0 for paid/comped).
   const owes = (m) => { const st = monthState(m, store.payments[day.slice(0, 7)]?.[m.id]?.entries); return st.state === "outstanding" || st.state === "partial" ? st.remaining : 0; };
+  // Never print a dollar figure next to someone who doesn't owe it. Showing
+  // every member's "$80/mo" rate here read as "$80 due" even after they paid.
+  const settledLabel = (m) => {
+    if (rateOf(m) === 0) return "No charge";
+    if (owes(m) > 0) return m.method || "Cash";
+    return `Paid ${isToday ? "this month" : monthLabel(keyToDate(day.slice(0, 7)))} ✓`;
+  };
   const owingHere = present.filter(({ m }) => owes(m) > 0);
   // Only ever a search result — the roster of people who did NOT come in is
   // noise on this screen, so nothing is listed until someone is typed.
@@ -999,7 +1006,9 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
           {present.map(({ m, v }) => (
             <div key={m.id} className="fr-row" style={{ ...rowBase, background: owes(m) > 0 ? C.redBg : C.greenBg }}>
               <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={() => openDetail(m.id)}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.sage, fontFamily: "Inter, sans-serif", fontWeight: 500 }}>{fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</div></div>
-              {owes(m) > 0 && <button className="fr-btn" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Record ${money(owes(m))} ${m.method === "Comp" ? "Cash" : (m.method || "Cash")} payment for ${m.name}?`)) onMarkPaid(m); }} style={{ ...pill, background: C.red, color: "#fff", border: "none", fontWeight: 700, cursor: "pointer" }}>Owes {money(owes(m))} · Mark paid ✓</button>}
+              {owes(m) > 0
+                ? <button className="fr-btn" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Record ${money(owes(m))} ${m.method === "Comp" ? "Cash" : (m.method || "Cash")} payment for ${m.name}?`)) onMarkPaid(m); }} style={{ ...pill, background: C.red, color: "#fff", border: "none", fontWeight: 700, cursor: "pointer" }}>Owes {money(owes(m))} · Mark paid ✓</button>
+                : <span style={{ ...pill, background: C.greenBg, color: C.sage, fontWeight: 700 }}>{rateOf(m) === 0 ? "No charge" : "Paid ✓"}</span>}
               <button className="fr-btn" onClick={() => onToggle(m.id)} style={ghostBtn}>Undo</button>
             </div>
           ))}
@@ -1012,7 +1021,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
       ) : (
         <div style={cardList}>{absent.map((m) => (
           <div key={m.id} className="fr-row clickable" style={rowBase} onClick={() => onToggle(m.id)}>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.inkSoft, fontFamily: "Inter, sans-serif" }}>{rateOf(m) === 0 ? "No charge" : `${m.method} · ${money(rateOf(m))}/mo`}</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: owes(m) > 0 ? C.inkSoft : C.sage, fontFamily: "Inter, sans-serif" }}>{settledLabel(m)}</div></div>
             {owes(m) > 0 && <button className="fr-btn" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Record ${money(owes(m))} ${m.method === "Comp" ? "Cash" : (m.method || "Cash")} payment for ${m.name}?`)) onMarkPaid(m); }} style={{ ...pill, background: "#fff", color: C.red, border: `1px solid ${C.red}`, fontWeight: 700, cursor: "pointer" }}>Owes {money(owes(m))} ✓</button>}
             <span style={{ ...pill, background: C.cream, color: C.teal, border: `1px solid ${C.line}` }}>Check in</span>
           </div>
