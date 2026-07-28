@@ -188,6 +188,11 @@ const fmt12 = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); const ap =
 const enc = encodeURIComponent;
 const vAt = (v) => (typeof v === "string" ? v : v?.at);
 const vBy = (v) => (typeof v === "string" ? null : v?.by || null);
+// Check-in timestamps are stored in UTC. Bucket them by the CLINIC's local day,
+// not the UTC day — otherwise an evening check-in in Florida (UTC-4) lands on
+// tomorrow's date and vanishes from "Today".
+const vDay = (v) => { const a = vAt(v); if (!a) return ""; const d = new Date(a); return isNaN(d.getTime()) ? String(a).slice(0, 10) : dateISO(d); };
+const vMonth = (v) => vDay(v).slice(0, 7);
 
 const sumEntries = (e = []) => e.reduce((s, x) => s + (Number(x.amount) || 0), 0);
 const isComp = (e = []) => e.some((x) => x.method === "Comp");
@@ -485,8 +490,8 @@ export default function App() {
     while (monthKey(cursor) < cur && g < 60) { const st = monthState(m, store.payments[monthKey(cursor)]?.[m.id]?.entries); if (st.state === "outstanding" || st.state === "partial") count++; cursor = addMonths(cursor, 1); g++; }
     return count;
   };
-  const visitsInMonth = (m, key) => (store.visits[m.id] || []).filter((v) => (vAt(v) || "").slice(0, 7) === key).length;
-  const visitedOn = (id, day) => (store.visits[id] || []).find((v) => (vAt(v) || "").slice(0, 10) === day);
+  const visitsInMonth = (m, key) => (store.visits[m.id] || []).filter((v) => vMonth(v) === key).length;
+  const visitedOn = (id, day) => (store.visits[id] || []).find((v) => vDay(v) === day);
   const lastReminder = (m) => (m.activity || []).filter((a) => a.type === "reminder").map((a) => a.at).sort().pop() || null;
 
   const addPayment = (member, { method, amount, date, note }) => {
@@ -522,9 +527,9 @@ export default function App() {
   const setMemberStatus = (member, status) => { const members = store.members.map((m) => (m.id === member.id ? { ...m, status, activity: [...(m.activity || []), { id: uid(), at: new Date().toISOString(), type: "status", text: `Status set to ${status}` }] } : m)); persist({ ...store, members }); flash(`${member.name} is now ${status}`); };
 
   const toggleDay = (id, day) => {
-    const list = store.visits[id] || []; const present = list.some((v) => (vAt(v) || "").slice(0, 10) === day);
+    const list = store.visits[id] || []; const present = list.some((v) => vDay(v) === day);
     let next;
-    if (present) next = list.filter((v) => (vAt(v) || "").slice(0, 10) !== day);
+    if (present) next = list.filter((v) => vDay(v) !== day);
     else next = [...list, { at: day === tIso ? new Date().toISOString() : `${day}T12:00:00`, by: currentStaff?.name || null }];
     persist({ ...store, visits: { ...store.visits, [id]: next } });
   };
@@ -560,7 +565,7 @@ export default function App() {
 
   const exportMonthCSV = () => { const lines = [["Member", "Status", "Paid", "Balance", "Methods", "Dates", "Notes"]]; rows.forEach((r) => { const e = monthPayments[r.m.id]?.entries || []; lines.push([r.m.name, r.state, r.paid, r.remaining, e.map((x) => x.method).join(" / "), e.map((x) => x.date).join(" / "), e.map((x) => x.note).filter(Boolean).join(" | ")]); }); downloadCSV(lines, `wellness-${mk}.csv`); flash("Month CSV downloaded"); };
   const exportMembersCSV = () => { const lines = [["Name", "Status", "Phone", "Email", "Rate", "Start", "Lifetime paid", "Months behind", "Visits this month"]]; store.members.forEach((m) => lines.push([m.name, m.status, m.phone, m.email, m.rate, m.startDate, lifetimePaid(m), monthsBehind(m), visitsInMonth(m, mk)])); downloadCSV(lines, "wellness-members.csv"); flash("Members CSV downloaded"); };
-  const exportAttendanceCSV = () => { const present = store.members.filter((m) => visitedOn(m.id, attDay)); const lines = [["Date", "Member", "Time", "Recorded by"]]; present.forEach((m) => { const v = visitedOn(m.id, attDay); lines.push([attDay, m.name, fmtTime(vAt(v)), vBy(v) || ""]); }); downloadCSV(lines, `attendance-${attDay}.csv`); flash("Attendance CSV downloaded"); };
+  const exportAttendanceCSV = () => { const present = store.members.map((m) => ({ m, v: visitedOn(m.id, attDay) })).filter((x) => x.v).sort((a, b) => (vAt(b.v) || "").localeCompare(vAt(a.v) || "")); const lines = [["Date", "Member", "Time", "Recorded by"]]; present.forEach(({ m, v }) => lines.push([attDay, m.name, fmtTime(vAt(v)), vBy(v) || ""])); downloadCSV(lines, `attendance-${attDay}.csv`); flash("Attendance CSV downloaded"); };
   const exportEmployeeICS = (emp) => { const evs = []; Object.entries(store.shifts).forEach(([d, list]) => list.forEach((s) => { if (d >= tIso && (s.employeeId === emp.id || s.coverBy === emp.id)) evs.push(shiftEvent(s, d, empById(s.coverBy || s.employeeId))); })); if (evs.length === 0) { flash("No upcoming shifts to export"); return; } download(buildICS(evs), `shifts-${firstName(emp.name)}.ics`, "text/calendar"); flash(`${evs.length} shift(s) → calendar file`); };
 
   const detailMember = detailId ? store.members.find((m) => m.id === detailId) : null;
@@ -931,7 +936,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
     const t = todayISO();
     const counts = {}; const names = {};
     Object.entries(store.visits).forEach(([id, list]) => (list || []).forEach((v) => {
-      const d = (vAt(v) || "").slice(0, 10); if (!d) return;
+      const d = vDay(v); if (!d) return;
       counts[d] = (counts[d] || 0) + 1;
       const m = store.members.find((x) => x.id === id); if (m && (names[d] = names[d] || []).length < 3) names[d].push(firstName(m.name));
     }));
@@ -963,7 +968,10 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
   // Amount this member still owes for the month being viewed (0 for paid/comped).
   const owes = (m) => { const st = monthState(m, store.payments[day.slice(0, 7)]?.[m.id]?.entries); return st.state === "outstanding" || st.state === "partial" ? st.remaining : 0; };
   const owingHere = present.filter(({ m }) => owes(m) > 0);
-  const absent = active.filter((m) => !visitedOn(m.id, day)).filter((m) => m.name.toLowerCase().includes(q.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
+  // Only ever a search result — the roster of people who did NOT come in is
+  // noise on this screen, so nothing is listed until someone is typed.
+  const query = q.trim().toLowerCase();
+  const absent = query ? active.filter((m) => !visitedOn(m.id, day) && m.name.toLowerCase().includes(query)).sort((a, b) => a.name.localeCompare(b.name)) : [];
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
@@ -976,7 +984,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
       </div>
       {!isToday && <div style={{ background: C.amberBg, color: C.amber, borderRadius: 10, padding: "8px 14px", fontFamily: "Inter, sans-serif", fontSize: 13, fontWeight: 600, marginBottom: 14 }}>Editing a past day — tap to add or remove who was here.</div>}
       <div className="grid-2" style={{ marginBottom: 18 }}>
-        <Stat label="Here this day" value={String(present.length)} accent={C.sage} />
+        <Stat label={isToday ? "Signed in today" : "Signed in"} value={String(present.length)} accent={C.sage} />
         <Stat label="Active members" value={String(active.length)} accent={C.teal} />
       </div>
       {owingHere.length > 0 && (
@@ -984,8 +992,10 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
           💳 {owingHere.length === 1 ? `${owingHere[0].m.name} is here and hasn't paid this month` : `${owingHere.length} members here haven't paid this month`} — tap a name to record payment or send a reminder.
         </div>
       )}
-      {present.length > 0 && (
-        <Section title={`Here · ${present.length}`} color={C.sage}>
+      {present.length === 0 ? (
+        <div style={{ ...emptyLine, textAlign: "center", marginBottom: 18 }}>{isToday ? "Nobody has checked in yet today." : "Nobody was checked in on this day."}</div>
+      ) : (
+        <Section title={`${isToday ? "Signed in today" : "Signed in"} · ${present.length} — most recent first`} color={C.sage}>
           {present.map(({ m, v }) => (
             <div key={m.id} className="fr-row" style={{ ...rowBase, background: owes(m) > 0 ? C.redBg : C.greenBg }}>
               <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={() => openDetail(m.id)}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.sage, fontFamily: "Inter, sans-serif", fontWeight: 500 }}>{fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</div></div>
@@ -995,9 +1005,11 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
           ))}
         </Section>
       )}
-      <div style={{ ...sectionLabel, marginBottom: 8 }}>Tap to check in</div>
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search members…" style={{ ...input, marginBottom: 10 }} />
-      {absent.length === 0 ? <div style={{ ...emptyLine, textAlign: "center" }}>{active.length === 0 ? "No active members yet — add them on the Members tab." : "Everyone's checked in for this day."}</div> : (
+      <div style={{ ...sectionLabel, marginBottom: 8 }}>Check someone in</div>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Type a name to check them in…" style={{ ...input, marginBottom: 10 }} />
+      {!query ? null : absent.length === 0 ? (
+        <div style={{ ...emptyLine, textAlign: "center" }}>{active.length === 0 ? "No active members yet — add them on the Members tab." : `No one left to check in matching “${q.trim()}”.`}</div>
+      ) : (
         <div style={cardList}>{absent.map((m) => (
           <div key={m.id} className="fr-row clickable" style={rowBase} onClick={() => onToggle(m.id)}>
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: C.inkSoft, fontFamily: "Inter, sans-serif" }}>{rateOf(m) === 0 ? "No charge" : `${m.method} · ${money(rateOf(m))}/mo`}</div></div>
