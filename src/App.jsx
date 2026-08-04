@@ -157,6 +157,10 @@ const IS_KIOSK = (() => {
 })();
 const exitKiosk = () => { try { localStorage.removeItem(KIOSK_FLAG); } catch {} window.location.href = window.location.pathname; };
 const METHODS = ["Cash", "Check", "Card", "Recurring", "Comp"];
+// "Recurring" is what the billing processor runs monthly. Staff call it auto-pay,
+// so that is what the screen says — the stored value stays "Recurring".
+const AUTOPAY = "Recurring";
+const methodLabel = (m) => (m === AUTOPAY ? "Auto-pay" : m === "Comp" ? "No charge" : m || "Cash");
 const STATUSES = ["active", "paused", "cancelled"];
 const STORE_KEY = "wellness:store:v1";
 const DEFAULT_RATE = 80;
@@ -520,7 +524,39 @@ export default function App() {
     persist({ ...store, payments: { ...store.payments, [mkDay]: { ...byMonth, [member.id]: { entries: [...existing, entry] } } } });
     flash(`${member.name} marked paid — ${money(entry.amount)} ${entry.method}`);
   };
-  const removeEntry = (member, idx) => { const entries = (store.payments[mk]?.[member.id]?.entries || []).filter((_, i) => i !== idx); persist({ ...store, payments: { ...store.payments, [mk]: { ...(store.payments[mk] || {}), [member.id]: { entries } } } }); };
+  const removeEntry = (member, k, idx) => { const entries = (store.payments[k]?.[member.id]?.entries || []).filter((_, i) => i !== idx); persist({ ...store, payments: { ...store.payments, [k]: { ...(store.payments[k] || {}), [member.id]: { entries } } } }); };
+  // Correct a payment that is already recorded — most often its method, when a
+  // member turned out to be on auto-pay rather than the cash it was logged as.
+  const updateEntry = (member, k, idx, patch) => {
+    const entries = (store.payments[k]?.[member.id]?.entries || []).map((e, i) => (i === idx ? { ...e, ...patch } : e));
+    persist({ ...store, payments: { ...store.payments, [k]: { ...(store.payments[k] || {}), [member.id]: { entries } } } });
+    flash("Payment updated");
+  };
+  // Change a member's payment type without opening the full edit form.
+  const setMemberMethod = (member, method) => {
+    persist({ ...store, members: store.members.map((m) => (m.id === member.id ? { ...m, method } : m)) });
+    flash(`${member.name} set to ${methodLabel(method)}`);
+  };
+  // Auto-pay run: record the month's dues for every auto-pay member who still
+  // has a balance, the way the billing processor charges them on the 1st.
+  const runAutoPay = () => {
+    const targets = monthMembers
+      .filter((m) => m.status === "active" && m.method === AUTOPAY)
+      .map((m) => ({ m, remaining: monthState(m, monthPayments[m.id]?.entries).remaining }))
+      .filter((x) => x.remaining > 0)
+      .sort((a, b) => a.m.name.localeCompare(b.m.name));
+    if (!targets.length) { flash("Every auto-pay member is already recorded for this month"); return; }
+    const total = targets.reduce((s, x) => s + x.remaining, 0);
+    if (!window.confirm(`Record ${targets.length} auto-pay payment${targets.length === 1 ? "" : "s"} for ${monthLabel(monthDate)}, totalling ${money(total)}?\n\n${targets.map((x) => `${x.m.name} — ${money(x.remaining)}`).join("\n")}`)) return;
+    const stamp = new Date().toISOString();
+    const month = { ...monthPayments };
+    targets.forEach(({ m, remaining }) => {
+      const prev = month[m.id]?.entries || [];
+      month[m.id] = { entries: [...prev, { amount: remaining, method: AUTOPAY, date: `${mk}-01`, note: "Auto-pay run", loggedAt: stamp }] };
+    });
+    persist({ ...store, payments: { ...store.payments, [mk]: month } });
+    flash(`Auto-pay recorded for ${targets.length} member${targets.length === 1 ? "" : "s"} — ${money(total)}`);
+  };
   const deleteMember = (member) => {
     const members = store.members.filter((m) => m.id !== member.id);
     const payments = {}; Object.entries(store.payments).forEach(([k, byId]) => { const c = { ...byId }; delete c[member.id]; payments[k] = c; });
@@ -638,6 +674,19 @@ export default function App() {
             </div>
             {monthMembers.length === 0 ? <Empty title="No members for this month" body="Add wellness members on the Members tab and they'll appear here automatically." action={() => setView("members")} actionLabel="Go to Members" /> : (
               <>
+                {(() => {
+                  const due = monthMembers.filter((m) => m.status === "active" && m.method === AUTOPAY).map((m) => monthState(m, monthPayments[m.id]?.entries).remaining).filter((r) => r > 0);
+                  const autoTotal = due.reduce((s, r) => s + r, 0);
+                  return (
+                    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                      <div style={{ fontFamily: "Inter, sans-serif", fontSize: 14, color: C.ink }}>
+                        <b>Auto-pay</b>
+                        <div style={{ fontSize: 13, color: C.inkSoft, marginTop: 2 }}>{due.length === 0 ? `All auto-pay members are recorded for ${monthLabel(monthDate)}.` : `${due.length} auto-pay member${due.length === 1 ? "" : "s"} not yet recorded — ${money(autoTotal)}.`}</div>
+                      </div>
+                      <button className="fr-btn" disabled={due.length === 0} onClick={runAutoPay} style={{ ...primaryBtn, background: due.length ? C.gold : C.line, color: due.length ? "#fff" : C.inkSoft, cursor: due.length ? "pointer" : "default" }}>Run auto-pay for {monthLabel(monthDate)}</button>
+                    </div>
+                  );
+                })()}
                 <input value={billQ} onChange={(e) => setBillQ(e.target.value)} placeholder="Search members by name…" style={{ ...input, marginBottom: 14 }} />
                 {(() => {
                   const q = billQ.trim().toLowerCase();
@@ -651,7 +700,7 @@ export default function App() {
                     </>
                   );
                 })()}
-                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", margin: "16px 0 8px", fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft }}><span>Cash {money(methodTotals.Cash)}</span><span>Check {money(methodTotals.Check)}</span><span>Card {money(methodTotals.Card)}</span><span>Recurring {money(methodTotals.Recurring)}</span><button className="fr-btn" onClick={exportMonthCSV} style={linkBtn}>Export this month</button></div>
+                <div style={{ display: "flex", gap: 14, flexWrap: "wrap", margin: "16px 0 8px", fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft }}><span>Cash {money(methodTotals.Cash)}</span><span>Check {money(methodTotals.Check)}</span><span>Card {money(methodTotals.Card)}</span><span>Auto-pay {money(methodTotals.Recurring)}</span><button className="fr-btn" onClick={exportMonthCSV} style={linkBtn}>Export this month</button></div>
               </>
             )}
           </>
@@ -666,7 +715,7 @@ export default function App() {
         {view === "history" && <History store={store} />}
       </div>
 
-      {detailMember && <MemberDetail member={detailMember} store={store} mk={mk} monthState={monthState} onMarkPaid={() => markPaidForDay(detailMember, tIso)} lifetimePaid={lifetimePaid(detailMember)} monthsAsMember={monthsAsMember(detailMember)} monthsBehind={monthsBehind(detailMember)} visitsThisMonth={visitsInMonth(detailMember, mk)} visitedToday={!!visitedOn(detailMember.id, tIso)} onClose={() => setDetailId(null)} onEdit={() => setMemberModal(detailMember)} onStatus={(s) => setMemberStatus(detailMember, s)} onNote={(t) => logActivity(detailMember.id, "note", t)} onRemind={() => setReminderMember(detailMember)} onInvoice={() => setInvoiceMember(detailMember)} onCheckIn={() => checkInToday(detailMember.id)} onUndoCheckIn={() => toggleDay(detailMember.id, tIso)} onRemoveEntry={(i) => removeEntry(detailMember, i)} onDelete={() => { if (window.confirm(`Permanently remove ${detailMember.name} and all their payment history? This cannot be undone.`)) deleteMember(detailMember); }} />}
+      {detailMember && <MemberDetail member={detailMember} store={store} mk={mk} monthState={monthState} onMarkPaid={() => markPaidForDay(detailMember, tIso)} lifetimePaid={lifetimePaid(detailMember)} monthsAsMember={monthsAsMember(detailMember)} monthsBehind={monthsBehind(detailMember)} visitsThisMonth={visitsInMonth(detailMember, mk)} visitedToday={!!visitedOn(detailMember.id, tIso)} onClose={() => setDetailId(null)} onEdit={() => setMemberModal(detailMember)} onStatus={(s) => setMemberStatus(detailMember, s)} onNote={(t) => logActivity(detailMember.id, "note", t)} onRemind={() => setReminderMember(detailMember)} onInvoice={() => setInvoiceMember(detailMember)} onCheckIn={() => checkInToday(detailMember.id)} onUndoCheckIn={() => toggleDay(detailMember.id, tIso)} onRemoveEntry={(k, i) => removeEntry(detailMember, k, i)} onUpdateEntry={(k, i, patch) => updateEntry(detailMember, k, i, patch)} onMethod={(mth) => setMemberMethod(detailMember, mth)} onDelete={() => { if (window.confirm(`Permanently remove ${detailMember.name} and all their payment history? This cannot be undone.`)) deleteMember(detailMember); }} />}
       {reminderMember && <ReminderModal member={reminderMember} mLabel={monthLabel(monthDate)} state={monthState(reminderMember, monthPayments[reminderMember.id]?.entries)} onClose={() => setReminderMember(null)} onSent={(ch) => { logActivity(reminderMember.id, "reminder", `Reminder sent (${ch})`); flash("Reminder logged"); }} />}
       {invoiceMember && <InvoiceModal member={invoiceMember} mk={mk} mLabel={monthLabel(monthDate)} state={monthState(invoiceMember, monthPayments[invoiceMember.id]?.entries)} onClose={() => setInvoiceMember(null)} onSent={(ch) => { logActivity(invoiceMember.id, "invoice", `Invoice ${ch}`); flash("Logged to activity"); }} />}
       {staffOpen && <StaffModal employees={store.employees} isAdmin={!!currentStaff?.isAdmin} adminCode={store.meta.adminCode} onSave={saveEmployee} onDelete={deleteEmployee} onExportICS={exportEmployeeICS} onSetAdminCode={setAdminCode} onClose={() => setStaffOpen(false)} />}
@@ -1027,10 +1076,11 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
         <div style={{ ...emptyLine, textAlign: "center" }}>{active.length === 0 ? "No active members yet — add them on the Members tab." : `No one left to check in matching “${q.trim()}”.`}</div>
       ) : (
         <div style={cardList}>{absent.map((m) => (
-          <div key={m.id} className="fr-row clickable" style={rowBase} onClick={() => onToggle(m.id)}>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: owes(m) > 0 ? C.inkSoft : C.sage, fontFamily: "Inter, sans-serif" }}>{settledLabel(m)}</div></div>
+          <div key={m.id} className="fr-row" style={rowBase}>
+            {/* Tapping the name opens the member screen; the button checks them in. */}
+            <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={() => openDetail(m.id)}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}</div><div style={{ fontSize: 13, color: owes(m) > 0 ? C.inkSoft : C.sage, fontFamily: "Inter, sans-serif" }}>{settledLabel(m)}</div></div>
             {owes(m) > 0 && <button className="fr-btn" onClick={(e) => { e.stopPropagation(); if (window.confirm(`Record ${money(owes(m))} ${m.method === "Comp" ? "Cash" : (m.method || "Cash")} payment for ${m.name}?`)) onMarkPaid(m); }} style={{ ...pill, background: "#fff", color: C.red, border: `1px solid ${C.red}`, fontWeight: 700, cursor: "pointer" }}>Owes {money(owes(m))} ✓</button>}
-            <span style={{ ...pill, background: C.cream, color: C.teal, border: `1px solid ${C.line}` }}>Check in</span>
+            <button className="fr-btn" onClick={() => onToggle(m.id)} style={{ ...pill, background: C.cream, color: C.teal, border: `1px solid ${C.line}`, fontWeight: 700, cursor: "pointer" }}>Check in</button>
           </div>
         ))}</div>
       )}
@@ -1081,7 +1131,7 @@ function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemin
   return (
     <div>
       <div className="fr-row" style={rowBase}>
-        <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={onOpen}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}{m.method === "Recurring" && <Badge>Auto-pay</Badge>}{state === "partial" && <Badge tone="amber">Partial</Badge>}</div><div style={{ fontSize: 13, color: state === "partial" ? C.amber : C.inkSoft, fontFamily: "Inter, sans-serif", fontWeight: state === "partial" ? 600 : 400 }}>{state === "partial" ? `Paid ${money(paid)} · ${money(remaining)} left` : `${money(remaining)} due · usually ${m.method}`}{remindLabel ? ` · ${remindLabel}` : ""}</div></div>
+        <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={onOpen}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}{m.method === AUTOPAY && <Badge>Auto-pay</Badge>}{state === "partial" && <Badge tone="amber">Partial</Badge>}</div><div style={{ fontSize: 13, color: state === "partial" ? C.amber : C.inkSoft, fontFamily: "Inter, sans-serif", fontWeight: state === "partial" ? 600 : 400 }}>{state === "partial" ? `Paid ${money(paid)} · ${money(remaining)} left` : `${money(remaining)} due · usually ${methodLabel(m.method)}`}{remindLabel ? ` · ${remindLabel}` : ""}</div></div>
         <button className="fr-btn" onClick={onInvoice} style={ghostBtn}>Invoice</button>
         <button className="fr-btn" onClick={onRemind} style={ghostBtn}>Remind</button>
         <button className="fr-btn" onClick={onToggle} style={{ ...primaryBtn, background: expanded ? C.tealDark : C.coral }}>{expanded ? "Close" : "Pay"}</button>
@@ -1092,11 +1142,11 @@ function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemin
 }
 function SettledRow({ row, entries, onOpen, onClear, onInvoice, mLabel }) {
   const { m, state, paid } = row;
-  const summary = state === "comp" ? "Comped this month" : `${money(paid)} · ${entries.map((e) => e.method).join(", ")}`;
+  const summary = state === "comp" ? "Comped this month" : `${money(paid)} · ${entries.map((e) => methodLabel(e.method)).join(", ")}`;
   return (
     <div className="fr-row" style={{ ...rowBase, background: C.greenBg }}>
       <div className="clickable" style={{ flex: 1, minWidth: 0 }} onClick={onOpen}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}{state === "comp" && <Badge tone="gold">Comp</Badge>}</div><div style={{ fontSize: 13, color: C.sage, fontFamily: "Inter, sans-serif", fontWeight: 500 }}>{summary}</div></div>
-      {paid > 0 && <button className="fr-btn" onClick={() => printReceipt(m, mLabel, { amount: paid, method: entries.map((e) => e.method).join(", "), date: (entries[entries.length - 1] || {}).date })} style={ghostBtn}>Print receipt</button>}
+      {paid > 0 && <button className="fr-btn" onClick={() => printReceipt(m, mLabel, { amount: paid, method: entries.map((e) => methodLabel(e.method)).join(", "), date: (entries[entries.length - 1] || {}).date })} style={ghostBtn}>Print receipt</button>}
       <button className="fr-btn" onClick={onInvoice} style={ghostBtn}>Receipt</button>
       <button className="fr-btn" onClick={onClear} style={ghostBtn}>Clear</button>
     </div>
@@ -1128,7 +1178,7 @@ function MembersTab({ store, mk, monthsBehind, visitsInMonth, onAdd, onOpen, onE
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>{[["active", "Active"], ["paused", "Paused"], ["cancelled", "Cancelled"], ["all", "All"]].map(([k, label]) => <button key={k} className="fr-btn" onClick={() => setFilter(k)} style={{ ...chip, background: filter === k ? C.teal : "#fff", color: filter === k ? "#fff" : C.ink, borderColor: filter === k ? C.teal : C.line }}>{label}</button>)}<button className="fr-btn" onClick={onExport} style={{ ...linkBtn, marginLeft: "auto" }}>Export members</button></div>
       {list.length === 0 ? <Empty title="No members here" body={store.members.length ? "Try a different filter or search." : "Add your first wellness member to start tracking."} action={onAdd} actionLabel="Add member" /> : (
         <div style={cardList}>{list.map((m) => { const behind = monthsBehind(m); const v = visitsInMonth(m, mk); return (
-          <div key={m.id} className="fr-row clickable" style={{ ...rowBase, opacity: m.status === "cancelled" ? 0.6 : 1 }} onClick={() => onOpen(m.id)}><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}{m.method === "Recurring" && <Badge>Auto-pay</Badge>}{m.status === "paused" && <Badge tone="gold">Paused</Badge>}{m.status === "cancelled" && <Badge muted>Cancelled</Badge>}</div><div style={{ fontSize: 13, color: C.inkSoft, fontFamily: "Inter, sans-serif" }}>{money(m.rate)}/mo · {m.method} · {v} visit{v === 1 ? "" : "s"} this month</div></div>{behind >= 1 && <span style={{ ...pill, background: C.redBg, color: C.red }}>{behind} behind</span>}<span style={{ color: C.inkSoft, fontSize: 20, lineHeight: 1 }}>›</span></div>
+          <div key={m.id} className="fr-row clickable" style={{ ...rowBase, opacity: m.status === "cancelled" ? 0.6 : 1 }} onClick={() => onOpen(m.id)}><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, color: C.ink, fontFamily: "Inter, sans-serif" }}>{m.name}{m.method === AUTOPAY && <Badge>Auto-pay</Badge>}{m.status === "paused" && <Badge tone="gold">Paused</Badge>}{m.status === "cancelled" && <Badge muted>Cancelled</Badge>}</div><div style={{ fontSize: 13, color: C.inkSoft, fontFamily: "Inter, sans-serif" }}>{rateOf(m) === 0 ? "No charge" : `${money(m.rate)}/mo`} · {methodLabel(m.method)} · {v} visit{v === 1 ? "" : "s"} this month</div></div>{behind >= 1 && <span style={{ ...pill, background: C.redBg, color: C.red }}>{behind} behind</span>}<span style={{ color: C.inkSoft, fontSize: 20, lineHeight: 1 }}>›</span></div>
         ); })}</div>
       )}
     </>
@@ -1320,7 +1370,7 @@ function InvoiceModal({ member, mk, mLabel, state, onClose, onSent }) {
 }
 
 // =================== MEMBER DETAIL ===================
-function MemberDetail({ member, store, mk, monthState, onMarkPaid, lifetimePaid, monthsAsMember, monthsBehind, visitsThisMonth, visitedToday, onClose, onEdit, onStatus, onNote, onRemind, onInvoice, onCheckIn, onUndoCheckIn, onRemoveEntry, onDelete }) {
+function MemberDetail({ member, store, mk, monthState, onMarkPaid, lifetimePaid, monthsAsMember, monthsBehind, visitsThisMonth, visitedToday, onClose, onEdit, onStatus, onNote, onRemind, onInvoice, onCheckIn, onUndoCheckIn, onRemoveEntry, onUpdateEntry, onMethod, onDelete }) {
   const curSt = monthState(member, store.payments[mk]?.[member.id]?.entries);
   const owesNow = member.status === "active" && (curSt.state === "outstanding" || curSt.state === "partial") ? curSt.remaining : 0;
   const [noteText, setNoteText] = useState("");
@@ -1331,13 +1381,57 @@ function MemberDetail({ member, store, mk, monthState, onMarkPaid, lifetimePaid,
   return (
     <div style={overlay} onClick={onClose}>
       <div style={drawer} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}><div><h2 style={{ fontFamily: "'Playfair Display', serif", color: C.teal, margin: 0, fontSize: 24 }}>{member.name}</h2><div style={{ fontFamily: "Inter, sans-serif", color: C.inkSoft, fontSize: 14, marginTop: 4 }}>{money(member.rate)}/mo · {member.method}{member.phone ? ` · ${member.phone}` : ""}{member.email ? ` · ${member.email}` : ""}</div><span style={{ ...pill, background: st.bg, color: st.fg, marginTop: 8, display: "inline-block" }}>{member.status}</span></div><button className="fr-btn" onClick={onClose} style={{ ...ghostBtn, fontSize: 18, padding: "4px 12px" }}>✕</button></div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}><div><h2 style={{ fontFamily: "'Playfair Display', serif", color: C.teal, margin: 0, fontSize: 24 }}>{member.name}</h2><div style={{ fontFamily: "Inter, sans-serif", color: C.inkSoft, fontSize: 14, marginTop: 4 }}>{rateOf(member) === 0 ? "No charge" : `${money(member.rate)}/mo`} · {methodLabel(member.method)}{member.phone ? ` · ${member.phone}` : ""}{member.email ? ` · ${member.email}` : ""}</div><span style={{ ...pill, background: st.bg, color: st.fg, marginTop: 8, display: "inline-block" }}>{member.status}</span></div><button className="fr-btn" onClick={onClose} style={{ ...ghostBtn, fontSize: 18, padding: "4px 12px" }}>✕</button></div>
         <div className="grid-3" style={{ margin: "18px 0" }}><MiniStat label="Lifetime paid" value={money(lifetimePaid)} /><MiniStat label="Member for" value={`${monthsAsMember} mo`} /><MiniStat label="Visits this month" value={String(visitsThisMonth)} /></div>
         {monthsBehind >= 1 && <div style={{ background: C.redBg, color: C.red, borderRadius: 12, padding: "10px 14px", fontFamily: "Inter, sans-serif", fontSize: 14, fontWeight: 600, marginBottom: 16 }}>{monthsBehind} month{monthsBehind === 1 ? "" : "s"} behind on payment</div>}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>{owesNow > 0 && onMarkPaid && <button className="fr-btn" onClick={() => { if (window.confirm(`Record ${money(owesNow)} ${member.method === "Comp" ? "Cash" : (member.method || "Cash")} payment for ${member.name}?`)) onMarkPaid(); }} style={{ ...primaryBtn, background: C.red }}>Mark {money(owesNow)} paid ✓</button>}<button className="fr-btn" onClick={onEdit} style={ghostBtn}>Edit</button><button className="fr-btn" onClick={onInvoice} style={ghostBtn}>Invoice / receipt</button><button className="fr-btn" onClick={onRemind} style={ghostBtn}>Send reminder</button>{visitedToday ? <button className="fr-btn" onClick={onUndoCheckIn} style={ghostBtn}>Checked in · undo</button> : <button className="fr-btn" onClick={onCheckIn} style={{ ...primaryBtn, background: C.sage }}>Check in</button>}{onDelete && <button className="fr-btn" onClick={onDelete} style={{ ...ghostBtn, color: C.red, borderColor: C.red, marginLeft: "auto" }}>Delete member</button>}</div>
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ ...sectionLabel, marginBottom: 8 }}>Payment type</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{METHODS.map((mth) => <button key={mth} className="fr-btn" onClick={() => onMethod(mth)} style={{ ...chip, background: member.method === mth ? C.teal : "#fff", color: member.method === mth ? "#fff" : C.ink, borderColor: member.method === mth ? C.teal : C.line }}>{methodLabel(mth)}</button>)}</div>
+          <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 6 }}>{member.method === AUTOPAY ? "Charged automatically each month — use “Run auto-pay” on the Billing tab to record the month in one go." : "Changing this takes effect on their next payment. To correct a payment already recorded, use the payment history below."}</div>
+        </div>
         <div style={{ marginBottom: 22 }}><div style={{ ...sectionLabel, marginBottom: 8 }}>Membership status</div><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{STATUSES.map((s) => <button key={s} className="fr-btn" onClick={() => onStatus(s)} style={{ ...chip, textTransform: "capitalize", background: member.status === s ? C.teal : "#fff", color: member.status === s ? "#fff" : C.ink, borderColor: member.status === s ? C.teal : C.line }}>{s}</button>)}</div>{member.status === "paused" && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 12, color: C.inkSoft, marginTop: 6 }}>Paused members are hidden from outstanding lists and revenue — good for seasonal members.</div>}</div>
-        <div style={{ marginBottom: 22 }}><div style={{ ...sectionLabel, marginBottom: 8 }}>Payment history</div>{months.length === 0 ? <div style={emptyLine}>No payments recorded yet.</div> : <div style={cardList}>{months.map((k) => { const entries = store.payments[k][member.id].entries || []; const ms = monthState(member, entries); const tone = ms.state === "paid" ? C.sage : ms.state === "comp" ? C.gold : ms.state === "partial" ? C.amber : C.red; return (<div key={k} style={{ padding: "10px 14px", borderBottom: `1px solid ${C.cream}` }}><div style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif" }}><span style={{ fontWeight: 600, color: C.ink }}>{monthLabel(keyToDate(k))}</span><span style={{ fontWeight: 600, color: tone, textTransform: "capitalize" }}>{ms.state === "partial" ? `${money(ms.paid)} of ${money(ms.rate)}` : ms.state}</span></div>{entries.map((e, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginTop: 4 }}><span>{e.method} · {fmtDateShort(e.date)}{e.note ? ` · ${e.note}` : ""}</span><span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>{money(e.amount)}{k === mk && <button className="fr-btn" onClick={() => onRemoveEntry(i)} style={{ ...linkBtn, color: C.red }}>remove</button>}</span></div>)}</div>); })}</div>}</div>
-        <div style={{ marginBottom: 22 }}><div style={{ ...sectionLabel, marginBottom: 8 }}>Recent visits</div>{visits.length === 0 ? <div style={emptyLine}>No check-ins recorded.</div> : <div style={{ fontFamily: "Inter, sans-serif", fontSize: 14, display: "flex", flexDirection: "column", gap: 4 }}>{visits.slice(0, 8).map((v, i) => <span key={i} style={{ color: C.inkSoft }}>{fmtDateShort(vAt(v))} · {fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</span>)}</div>}</div>
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ ...sectionLabel, marginBottom: 8 }}>Payment history</div>
+          {months.length === 0 ? <div style={emptyLine}>No payments recorded yet.</div> : (
+            <div style={cardList}>{months.map((k) => {
+              const entries = store.payments[k][member.id].entries || [];
+              const ms = monthState(member, entries);
+              const tone = ms.state === "paid" ? C.sage : ms.state === "comp" ? C.gold : ms.state === "partial" ? C.amber : C.red;
+              return (
+                <div key={k} style={{ padding: "10px 14px", borderBottom: `1px solid ${C.cream}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif" }}>
+                    <span style={{ fontWeight: 600, color: C.ink }}>{monthLabel(keyToDate(k))}</span>
+                    <span style={{ fontWeight: 600, color: tone, textTransform: "capitalize" }}>{ms.state === "partial" ? `${money(ms.paid)} of ${money(ms.rate)}` : ms.state}</span>
+                  </div>
+                  {entries.map((e, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginTop: 6, flexWrap: "wrap" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                        {/* A recorded payment's method is editable — a member on auto-pay
+                            is often logged as cash by mistake, and the method feeds the
+                            payment-breakdown report. */}
+                        <select value={e.method || "Cash"} onChange={(ev) => onUpdateEntry(k, i, { method: ev.target.value })}
+                          style={{ fontFamily: "Inter, sans-serif", fontSize: 13, padding: "3px 6px", borderRadius: 7, border: `1px solid ${C.line}`, background: "#fff", color: C.ink }}>
+                          {METHODS.map((mth) => <option key={mth} value={mth}>{methodLabel(mth)}</option>)}
+                        </select>
+                        <span>· {fmtDateShort(e.date)}{e.note ? ` · ${e.note}` : ""}</span>
+                      </span>
+                      <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>{money(e.amount)}<button className="fr-btn" onClick={() => { if (window.confirm(`Remove this ${money(e.amount)} payment from ${monthLabel(keyToDate(k))}?`)) onRemoveEntry(k, i); }} style={{ ...linkBtn, color: C.red }}>remove</button></span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}</div>
+          )}
+        </div>
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ ...sectionLabel, marginBottom: 8 }}>Check-in history · {visits.length}</div>
+          {visits.length === 0 ? <div style={emptyLine}>No check-ins recorded.</div> : (
+            <div style={{ fontFamily: "Inter, sans-serif", fontSize: 14, display: "flex", flexDirection: "column", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+              {visits.map((v, i) => <span key={i} style={{ color: C.inkSoft }}>{fmtFull(vDay(v))} · {fmtTime(vAt(v))}{vBy(v) ? ` · by ${firstName(vBy(v))}` : ""}</span>)}
+            </div>
+          )}
+        </div>
         <div><div style={{ ...sectionLabel, marginBottom: 8 }}>Notes & activity</div><div style={{ display: "flex", gap: 8, marginBottom: 12 }}><input value={noteText} onChange={(e) => setNoteText(e.target.value)} placeholder="Add a note…" style={input} /><button className="fr-btn" disabled={!noteText.trim()} onClick={() => { onNote(noteText.trim()); setNoteText(""); }} style={{ ...primaryBtn, opacity: noteText.trim() ? 1 : 0.5 }}>Add</button></div>{activity.length === 0 ? <div style={emptyLine}>No activity yet.</div> : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{activity.map((a) => <div key={a.id} style={{ fontFamily: "Inter, sans-serif", fontSize: 13 }}><span style={{ color: a.type === "reminder" ? C.coral : a.type === "status" ? C.teal : a.type === "invoice" ? C.sage : C.inkSoft, fontWeight: 600, textTransform: "capitalize" }}>{a.type}</span><span style={{ color: C.ink }}> — {a.text}</span><span style={{ color: C.inkSoft }}> · {fmtDateShort(a.at.slice(0, 10))}</span></div>)}</div>}</div>
       </div>
     </div>
@@ -1393,7 +1487,7 @@ function Reports({ store, mk, monthLabelStr, onPrev, onNext, lifetimePaid, month
         <div style={{ ...sectionLabel, marginBottom: 14 }}>Payments by method</div>
         {["Cash", "Check", "Card", "Recurring", "Comp"].map((mth) => (
           <div key={mth} style={{ marginBottom: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif", fontSize: 13, marginBottom: 4 }}><span style={{ fontWeight: 600, color: C.ink }}>{mth}</span><span style={{ color: C.inkSoft }}>{money(methods[mth].amt)} · {methods[mth].n} payment{methods[mth].n === 1 ? "" : "s"}</span></div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "Inter, sans-serif", fontSize: 13, marginBottom: 4 }}><span style={{ fontWeight: 600, color: C.ink }}>{methodLabel(mth)}</span><span style={{ color: C.inkSoft }}>{money(methods[mth].amt)} · {methods[mth].n} payment{methods[mth].n === 1 ? "" : "s"}</span></div>
             <div style={{ height: 8, background: C.cream, borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${(methods[mth].amt / methodMax) * 100}%`, height: "100%", background: methodColor[mth], transition: "width .3s" }} /></div>
           </div>
         ))}
@@ -1419,7 +1513,7 @@ function ReportRow({ row, paid, entries, onOpen }) {
   const isComp = state === "comp";
   const color = isComp ? C.gold : paid ? C.sage : C.red;
   const icon = isComp ? "★" : paid ? "✓" : "!";
-  const sub = isComp ? "No charge (comped)" : paid ? `Paid ${money(row.paid)}${entries.length ? " · " + entries.map((e) => e.method).join(", ") : ""}` : state === "partial" ? `Paid ${money(row.paid)} · ${money(remaining)} left` : `${money(remaining)} due · usually ${m.method}`;
+  const sub = isComp ? "No charge (comped)" : paid ? `Paid ${money(row.paid)}${entries.length ? " · " + entries.map((e) => methodLabel(e.method)).join(", ") : ""}` : state === "partial" ? `Paid ${money(row.paid)} · ${money(remaining)} left` : `${money(remaining)} due · usually ${methodLabel(m.method)}`;
   return (
     <div className="fr-row clickable" style={{ ...rowBase, background: paid ? C.greenBg : C.redBg }} onClick={onOpen}>
       <span style={{ width: 26, height: 26, borderRadius: 999, background: color, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 14, flex: "0 0 auto" }}>{icon}</span>
