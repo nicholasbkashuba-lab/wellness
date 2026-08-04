@@ -1092,12 +1092,23 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
 function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outstandingAmt, settledCount, expectedCount, methodTotals, monthsBehind, visitsInMonth, openDetail }) {
   const active = store.members.filter((m) => m.status === "active");
   const paused = store.members.filter((m) => m.status === "paused");
-  const mrr = active.reduce((s, m) => s + rateOf(m), 0);
+  const rosterMrr = active.reduce((s, m) => s + rateOf(m), 0);
+  // Expected monthly is based on who actually came in, not the whole roster —
+  // a name on the list who never walks through the door is not expected revenue.
+  const attendedIn = (key) => active.filter((m) => visitsInMonth(m, key) > 0);
+  const expectedFor = (key) => attendedIn(key).reduce((s, m) => s + rateOf(m), 0);
+  const attendedNow = attendedIn(mk);
+  const expectedNow = expectedFor(mk);
+  // A month still in progress has fewer check-ins logged than it will end with,
+  // so also average the last three months that had any attendance.
+  const priorKeys = [1, 2, 3].map((n) => monthKey(addMonths(keyToDate(mk), -n))).filter((k) => attendedIn(k).length > 0);
+  const expectedAvg = priorKeys.length ? Math.round(priorKeys.reduce((s, k) => s + expectedFor(k), 0) / priorKeys.length) : expectedNow;
+  const avgAttendees = priorKeys.length ? Math.round(priorKeys.reduce((s, k) => s + attendedIn(k).length, 0) / priorKeys.length) : attendedNow.length;
   const newThisMonth = store.members.filter((m) => m.startDate && m.startDate.slice(0, 7) === mk);
   const visitsTotal = store.members.reduce((s, m) => s + visitsInMonth(m, mk), 0);
   const rate = expectedCount > 0 ? Math.round((settledCount / expectedCount) * 100) : 0;
   const behind = active.map((m) => ({ m, n: monthsBehind(m) })).filter((x) => x.n >= 1).sort((a, b) => b.n - a.n);
-  const avgVisits = active.length ? (visitsTotal / active.length).toFixed(1) : "0";
+  const avgVisits = attendedNow.length ? (visitsTotal / attendedNow.length).toFixed(1) : "0";
   return (
     <>
       <MonthBar label={monthLabelStr} onPrev={onPrev} onNext={onNext} />
@@ -1107,9 +1118,16 @@ function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outsta
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft }}><span>{money(collected)} collected</span><span>{money(outstandingAmt)} outstanding</span></div>
       </div>
       <div className="grid-3" style={{ marginBottom: 12 }}>
-        <Stat label="Expected monthly" value={money(mrr)} accent={C.teal} sub={`${active.length} active`} />
+        <Stat label="Expected monthly" value={money(expectedNow)} accent={C.teal} sub={`${attendedNow.length} signed in`} />
         <Stat label="New this month" value={String(newThisMonth.length)} accent={C.coral} sub={paused.length ? `${paused.length} paused` : "members"} />
-        <Stat label="Visits this month" value={String(visitsTotal)} accent={C.sage} sub={`${avgVisits} avg / member`} />
+        <Stat label="Visits this month" value={String(visitsTotal)} accent={C.sage} sub={`${avgVisits} avg / attendee`} />
+      </div>
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "12px 16px", marginBottom: 16, fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, lineHeight: 1.6 }}>
+        {attendedNow.length === 0
+          ? <>No check-ins were recorded in {monthLabelStr}, so there is nothing to base expected monthly on for that month.</>
+          : <>Expected monthly counts only the <b style={{ color: C.ink }}>{attendedNow.length}</b> member{attendedNow.length === 1 ? "" : "s"} who signed in during {monthLabelStr}, at their own rate — not everyone on the roster.</>}
+        {priorKeys.length > 0 && <> Averaged over the last {priorKeys.length} month{priorKeys.length === 1 ? "" : "s"} it runs <b style={{ color: C.teal }}>{money(expectedAvg)}</b> from about <b style={{ color: C.ink }}>{avgAttendees}</b> people a month, which is the fairer figure while {monthLabelStr} is still filling in.</>}
+        {" "}All {active.length} active members together would be {money(rosterMrr)}.
       </div>
       <Section title={`Needs attention · ${behind.length}`} color={C.red}>
         {behind.length === 0 ? <div style={{ padding: "16px 14px", fontFamily: "Inter, sans-serif", color: C.inkSoft, fontSize: 14 }}>Everyone's current on prior months. Nice.</div> : behind.map(({ m, n }) => (
