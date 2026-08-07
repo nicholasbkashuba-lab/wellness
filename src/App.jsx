@@ -695,7 +695,7 @@ export default function App() {
                   return (
                     <>
                       {q && fNeeds.length === 0 && fSettled.length === 0 && <div style={{ fontFamily: "Inter, sans-serif", fontSize: 14, color: C.inkSoft, padding: "8px 2px" }}>No members match “{billQ}”.</div>}
-                      {fNeeds.length > 0 && <Section title={`Needs payment · ${fNeeds.length}`} color={C.red}>{fNeeds.map((r) => <NeedsRow key={r.m.id} row={r} mLabel={monthLabel(monthDate)} reminder={lastReminder(r.m)} expanded={expanded === r.m.id} onToggle={() => setExpanded(expanded === r.m.id ? null : r.m.id)} onOpen={() => setDetailId(r.m.id)} onRecord={(d) => addPayment(r.m, d)} onRemind={() => setReminderMember(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
+                      {fNeeds.length > 0 && <Section title={`Needs payment · ${fNeeds.length}`} color={C.red}>{fNeeds.map((r) => <NeedsRow key={r.m.id} row={r} mk={mk} mLabel={monthLabel(monthDate)} reminder={lastReminder(r.m)} expanded={expanded === r.m.id} onToggle={() => setExpanded(expanded === r.m.id ? null : r.m.id)} onOpen={() => setDetailId(r.m.id)} onRecord={(d) => addPayment(r.m, d)} onRemind={() => setReminderMember(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
                       {fSettled.length > 0 && <Section title={`Settled · ${fSettled.length}`} color={C.sage}>{fSettled.map((r) => <SettledRow key={r.m.id} row={r} mLabel={monthLabel(monthDate)} entries={monthPayments[r.m.id]?.entries || []} onOpen={() => setDetailId(r.m.id)} onClear={() => clearMonth(r.m)} onInvoice={() => setInvoiceMember(r.m)} />)}</Section>}
                     </>
                   );
@@ -1143,7 +1143,7 @@ function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outsta
 }
 
 // =================== BILLING ROWS ===================
-function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemind, onInvoice, mLabel }) {
+function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemind, onInvoice, mk, mLabel }) {
   const { m, state, paid, remaining } = row;
   const remindLabel = reminder ? (daysAgo(reminder) === 0 ? "Reminded today" : `Reminded ${daysAgo(reminder)}d ago`) : null;
   return (
@@ -1154,7 +1154,7 @@ function NeedsRow({ row, reminder, expanded, onToggle, onOpen, onRecord, onRemin
         <button className="fr-btn" onClick={onRemind} style={ghostBtn}>Remind</button>
         <button className="fr-btn" onClick={onToggle} style={{ ...primaryBtn, background: expanded ? C.tealDark : C.coral }}>{expanded ? "Close" : "Pay"}</button>
       </div>
-      {expanded && <PayPanel member={m} mLabel={mLabel} defaultAmount={remaining} onRecord={onRecord} />}
+      {expanded && <PayPanel member={m} mk={mk} mLabel={mLabel} defaultAmount={remaining} onRecord={onRecord} />}
     </div>
   );
 }
@@ -1170,16 +1170,26 @@ function SettledRow({ row, entries, onOpen, onClear, onInvoice, mLabel }) {
     </div>
   );
 }
-function PayPanel({ member, mLabel, defaultAmount, onRecord }) {
+// Default "date received" to a day inside the month being billed. It used to
+// default to today, so recording a July payment during August stamped it with
+// an August date and the payment no longer matched the month it settled.
+const defaultDateForMonth = (key) => {
+  const t = todayISO();
+  if (!key || t.slice(0, 7) === key) return t;
+  const [y, m] = key.split("-").map(Number);
+  if (!y || !m) return t;
+  return t.slice(0, 7) < key ? `${key}-01` : dateISO(new Date(y, m, 0)); // last day of a past month
+};
+function PayPanel({ member, mk, mLabel, defaultAmount, onRecord }) {
   const [method, setMethod] = useState(member.method || "Cash");
   const [amount, setAmount] = useState(defaultAmount ?? member.rate ?? DEFAULT_RATE);
-  const [date, setDate] = useState(todayISO()); const [note, setNote] = useState("");
+  const [date, setDate] = useState(() => defaultDateForMonth(mk)); const [note, setNote] = useState("");
   return (
     <div style={{ background: C.cream, borderTop: `1px solid ${C.line}`, padding: 14 }}>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{METHODS.map((mth) => <button key={mth} className="fr-btn" onClick={() => { setMethod(mth); if (mth === "Comp") setAmount(0); }} style={{ ...chip, background: method === mth ? C.teal : "#fff", color: method === mth ? "#fff" : C.ink, borderColor: method === mth ? C.teal : C.line }}>{mth}</button>)}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{METHODS.map((mth) => <button key={mth} className="fr-btn" onClick={() => { setMethod(mth); if (mth === "Comp") setAmount(0); }} style={{ ...chip, background: method === mth ? C.teal : "#fff", color: method === mth ? "#fff" : C.ink, borderColor: method === mth ? C.teal : C.line }}>{methodLabel(mth)}</button>)}</div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}><Field label="Amount"><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} style={{ ...input, width: 110 }} /></Field><Field label="Date received"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...input, width: 160 }} /></Field><Field label="Note (optional)" grow><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Check #, etc." style={input} /></Field></div>
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        <button className="fr-btn" onClick={() => onRecord({ method, amount, date, note })} style={{ ...primaryBtn, background: C.sage, flex: 1, minWidth: 140 }}>Record {money(amount)} · {method}</button>
+        <button className="fr-btn" onClick={() => onRecord({ method, amount, date, note })} style={{ ...primaryBtn, background: C.sage, flex: 1, minWidth: 140 }}>Record {money(amount)} · {methodLabel(method)}</button>
         <button className="fr-btn" onClick={() => { onRecord({ method, amount, date, note }); printReceipt(member, mLabel, { amount: Number(amount) || 0, method, date, note }); }} style={{ ...ghostBtn }}>Record &amp; print receipt</button>
       </div>
     </div>
@@ -1422,19 +1432,26 @@ function MemberDetail({ member, store, mk, monthState, onMarkPaid, lifetimePaid,
                     <span style={{ fontWeight: 600, color: C.ink }}>{monthLabel(keyToDate(k))}</span>
                     <span style={{ fontWeight: 600, color: tone, textTransform: "capitalize" }}>{ms.state === "partial" ? `${money(ms.paid)} of ${money(ms.rate)}` : ms.state}</span>
                   </div>
+                  {/* Method, date and amount are all editable. A payment rebuilt from
+                      paper records gets stamped with the day it was typed in, which is
+                      not the day the member actually paid, and the method is often a
+                      guess — both need correcting after the fact. */}
                   {entries.map((e, i) => (
-                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginTop: 6, flexWrap: "wrap" }}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-                        {/* A recorded payment's method is editable — a member on auto-pay
-                            is often logged as cash by mistake, and the method feeds the
-                            payment-breakdown report. */}
-                        <select value={e.method || "Cash"} onChange={(ev) => onUpdateEntry(k, i, { method: ev.target.value })}
-                          style={{ fontFamily: "Inter, sans-serif", fontSize: 13, padding: "3px 6px", borderRadius: 7, border: `1px solid ${C.line}`, background: "#fff", color: C.ink }}>
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginTop: 8, flexWrap: "wrap" }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
+                        <select value={e.method || "Cash"} onChange={(ev) => onUpdateEntry(k, i, { method: ev.target.value })} style={entryInput}>
                           {METHODS.map((mth) => <option key={mth} value={mth}>{methodLabel(mth)}</option>)}
                         </select>
-                        <span>· {fmtDateShort(e.date)}{e.note ? ` · ${e.note}` : ""}</span>
+                        <input type="date" value={(e.date || "").slice(0, 10)} onChange={(ev) => { if (ev.target.value) onUpdateEntry(k, i, { date: ev.target.value }); }} style={entryInput} />
+                        {e.note ? <span>· {e.note}</span> : null}
+                        {e.loggedAt && (e.loggedAt || "").slice(0, 10) !== (e.date || "").slice(0, 10) && <span style={{ fontSize: 12 }}>· logged {fmtDateShort((e.loggedAt || "").slice(0, 10))}</span>}
                       </span>
-                      <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>{money(e.amount)}<button className="fr-btn" onClick={() => { if (window.confirm(`Remove this ${money(e.amount)} payment from ${monthLabel(keyToDate(k))}?`)) onRemoveEntry(k, i); }} style={{ ...linkBtn, color: C.red }}>remove</button></span>
+                      <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>$<input type="number" min="0" step="1" defaultValue={Number(e.amount) || 0}
+                          onBlur={(ev) => { const v = Number(ev.target.value); if (Number.isFinite(v) && v >= 0 && v !== Number(e.amount)) onUpdateEntry(k, i, { amount: v }); }}
+                          onKeyDown={(ev) => { if (ev.key === "Enter") ev.currentTarget.blur(); }} style={{ ...entryInput, width: 70 }} /></span>
+                        <button className="fr-btn" onClick={() => { if (window.confirm(`Remove this ${money(e.amount)} payment from ${monthLabel(keyToDate(k))}?`)) onRemoveEntry(k, i); }} style={{ ...linkBtn, color: C.red }}>remove</button>
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1606,6 +1623,8 @@ const keyBtn = { background: C.card, border: `1px solid ${C.line}`, borderRadius
 const chip = { border: `1px solid ${C.line}`, borderRadius: 999, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "Inter, sans-serif" };
 const pill = { fontSize: 12, fontWeight: 700, padding: "4px 10px", borderRadius: 999, fontFamily: "Inter, sans-serif", whiteSpace: "nowrap" };
 const input = { width: "100%", padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10, fontSize: 14, fontFamily: "Inter, sans-serif", background: "#fff", color: C.ink };
+// Compact field used inside a payment-history row.
+const entryInput = { fontFamily: "Inter, sans-serif", fontSize: 13, padding: "3px 6px", borderRadius: 7, border: `1px solid ${C.line}`, background: "#fff", color: C.ink };
 const emptyLine = { fontFamily: "Inter, sans-serif", fontSize: 14, color: C.inkSoft, padding: "10px 0" };
 const overlay = { position: "fixed", inset: 0, background: "rgba(19,73,94,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 };
 const modal = { background: C.card, borderRadius: 18, padding: 24, width: "100%", maxWidth: 460, maxHeight: "92vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" };
