@@ -2,3 +2,8 @@ node_modules
 dist
 .vercel
 .DS_Store
+
+# Member exports never belong in this repo — it is public.
+# The clinic's CSV and PDF exports carry names, phone numbers and balances.
+*.pdf
+*.csv
