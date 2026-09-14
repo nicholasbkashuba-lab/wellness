@@ -503,6 +503,10 @@ export default function App() {
   };
   const visitsInMonth = (m, key) => (store.visits[m.id] || []).filter((v) => vMonth(v) === key).length;
   const visitedOn = (id, day) => (store.visits[id] || []).find((v) => vDay(v) === day);
+  // How many individual people came in during a month — someone who checked in
+  // twelve times counts once. Anyone with a check-in counts, paused and
+  // cancelled members included, because they were physically here.
+  const peopleInMonth = (key) => store.members.reduce((n, m) => n + (visitsInMonth(m, key) > 0 ? 1 : 0), 0);
   const lastReminder = (m) => (m.activity || []).filter((a) => a.type === "reminder").map((a) => a.at).sort().pop() || null;
 
   const addPayment = (member, { method, amount, date, note }) => {
@@ -630,8 +634,9 @@ export default function App() {
         .clickable { cursor: pointer; } .cal-cell:hover { background: ${C.cream}; }
         .grid-3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
         .grid-2 { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+        .grid-4 { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
         .cal-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
-        @media (max-width:520px){ .grid-3{grid-template-columns:repeat(2,1fr);} }
+        @media (max-width:520px){ .grid-3{grid-template-columns:repeat(2,1fr);} .grid-4{grid-template-columns:repeat(2,1fr);} }
         @media (prefers-reduced-motion: reduce){ * { transition:none !important; } }
       `}</style>
 
@@ -660,7 +665,7 @@ export default function App() {
           ))}
         </nav>
 
-        {view === "dashboard" && <Dashboard monthLabelStr={monthLabel(monthDate)} onPrev={() => changeMonth(-1)} onNext={() => changeMonth(1)} store={store} mk={mk} collected={collected} outstandingAmt={outstandingAmt} settledCount={settled.length} expectedCount={monthMembers.length} methodTotals={methodTotals} monthsBehind={monthsBehind} visitsInMonth={visitsInMonth} openDetail={setDetailId} />}
+        {view === "dashboard" && <Dashboard monthLabelStr={monthLabel(monthDate)} onPrev={() => changeMonth(-1)} onNext={() => changeMonth(1)} store={store} mk={mk} collected={collected} outstandingAmt={outstandingAmt} settledCount={settled.length} expectedCount={monthMembers.length} methodTotals={methodTotals} monthsBehind={monthsBehind} visitsInMonth={visitsInMonth} peopleInMonth={peopleInMonth} openDetail={setDetailId} />}
 
         {view === "checkin" && <CheckInTab store={store} day={attDay} isToday={attDay === tIso} onPrev={() => setAttDay((d) => addDaysISO(d, -1))} onNext={() => { if (attDay < tIso) setAttDay((d) => addDaysISO(d, 1)); }} onToday={() => setAttDay(tIso)} onPickDay={setAttDay} visitedOn={visitedOn} onToggle={(id) => toggleDay(id, attDay)} onMarkPaid={(m) => markPaidForDay(m, attDay)} onExport={exportAttendanceCSV} openDetail={setDetailId} />}
 
@@ -998,11 +1003,13 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
     }));
     const mkCal = monthKey(calMonth);
     const monthTotal = Object.entries(counts).reduce((s, [d, n]) => (d.slice(0, 7) === mkCal ? s + n : s), 0);
+    // Distinct people, not visits — the same member coming in nine times is one person.
+    const monthPeople = store.members.filter((m) => (store.visits[m.id] || []).some((v) => vMonth(v) === mkCal)).length;
     return (
       <>
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>{modeToggle}</div>
         <MonthBar label={monthLabel(calMonth)} onPrev={() => setCalMonth((d) => addMonths(d, -1))} onNext={() => setCalMonth((d) => addMonths(d, 1))} />
-        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginBottom: 12 }}>{monthTotal} check-in{monthTotal === 1 ? "" : "s"} this month · tap a day to see everyone who was there</div>
+        <div style={{ fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft, marginBottom: 12 }}>{monthTotal} check-in{monthTotal === 1 ? "" : "s"} from {monthPeople} individual {monthPeople === 1 ? "person" : "people"} this month · tap a day to see everyone who was there</div>
         <div className="cal-grid" style={{ marginBottom: 6 }}>{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d} style={{ textAlign: "center", fontFamily: "Inter, sans-serif", fontSize: 11, fontWeight: 700, color: C.inkSoft, textTransform: "uppercase", letterSpacing: 1 }}>{d}</div>)}</div>
         <div className="cal-grid">{monthMatrix(calMonth).map((d, i) => {
           if (!d) return <div key={i} style={{ minHeight: 78 }} />;
@@ -1089,7 +1096,7 @@ function CheckInTab({ store, day, isToday, onPrev, onNext, onToday, onPickDay, v
 }
 
 // =================== DASHBOARD ===================
-function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outstandingAmt, settledCount, expectedCount, methodTotals, monthsBehind, visitsInMonth, openDetail }) {
+function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outstandingAmt, settledCount, expectedCount, methodTotals, monthsBehind, visitsInMonth, peopleInMonth, openDetail }) {
   const active = store.members.filter((m) => m.status === "active");
   const paused = store.members.filter((m) => m.status === "paused");
   const rosterMrr = active.reduce((s, m) => s + rateOf(m), 0);
@@ -1106,6 +1113,8 @@ function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outsta
   const avgAttendees = priorKeys.length ? Math.round(priorKeys.reduce((s, k) => s + attendedIn(k).length, 0) / priorKeys.length) : attendedNow.length;
   const newThisMonth = store.members.filter((m) => m.startDate && m.startDate.slice(0, 7) === mk);
   const visitsTotal = store.members.reduce((s, m) => s + visitsInMonth(m, mk), 0);
+  const peopleNow = peopleInMonth(mk);
+  const peoplePrior = priorKeys.length ? Math.round(priorKeys.reduce((s, k) => s + peopleInMonth(k), 0) / priorKeys.length) : 0;
   const rate = expectedCount > 0 ? Math.round((settledCount / expectedCount) * 100) : 0;
   const behind = active.map((m) => ({ m, n: monthsBehind(m) })).filter((x) => x.n >= 1).sort((a, b) => b.n - a.n);
   const avgVisits = attendedNow.length ? (visitsTotal / attendedNow.length).toFixed(1) : "0";
@@ -1117,8 +1126,9 @@ function Dashboard({ monthLabelStr, onPrev, onNext, store, mk, collected, outsta
         <Bar pct={rate} />
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontFamily: "Inter, sans-serif", fontSize: 13, color: C.inkSoft }}><span>{money(collected)} collected</span><span>{money(outstandingAmt)} outstanding</span></div>
       </div>
-      <div className="grid-3" style={{ marginBottom: 12 }}>
+      <div className="grid-4" style={{ marginBottom: 12 }}>
         <Stat label="Expected monthly" value={money(expectedNow)} accent={C.teal} sub={`${attendedNow.length} signed in`} />
+        <Stat label="People this month" value={String(peopleNow)} accent={C.gold} sub={peoplePrior ? `${peoplePrior} avg / month` : "individual people"} />
         <Stat label="New this month" value={String(newThisMonth.length)} accent={C.coral} sub={paused.length ? `${paused.length} paused` : "members"} />
         <Stat label="Visits this month" value={String(visitsTotal)} accent={C.sage} sub={`${avgVisits} avg / attendee`} />
       </div>
